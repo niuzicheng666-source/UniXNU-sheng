@@ -23,9 +23,6 @@ on:
       data_seed_sha256:
         description: "Required SHA-256 when data_seed_url is supplied"
         type: string
-  schedule:
-    # 每天北京时间 07:00 (UTC 前一天 23:00) 自动跑一次
-    - cron: '0 23 * * *'
 
 permissions:
   contents: read
