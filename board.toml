@@ -27,8 +27,8 @@ roots = ["com.apple.AppleFSCompression.AppleFSCompressionTypeZlib", "com.apple.d
 [firmware]
 config = "sheng"
 # TODO: create a babylonPkg (like ishtarPkg inside uefi-sheng). First bring-up reuses shengPkg.
-dsc = "Platforms/Xiaomi/shengPkg/sheng.dsc"
-fd = "Build/shengPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+dsc = "Platforms/Xiaomi/babylonPkg/babylon.dsc"
+fd = "Build/babylonPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
 preflight = ["scripts/fetch-sheng-dts.py", "scripts/download-sheng-firmware.py", "scripts/extract-sheng-firmware.py --delete-archive", "scripts/import-sheng-uefi.py", "scripts/check-sheng.py"]
 submodules = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 patches = ["Resources/MuPatches/Gic-Spurious.patch"]
