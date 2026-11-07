@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   package:
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
