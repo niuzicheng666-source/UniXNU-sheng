@@ -149,7 +149,14 @@ jobs:
           if [ "$OS_PROFILE" = 27 ] && [ "$INIT_DATA" = true ]; then
             args+=(--init-data)
           fi
-          scripts/package.sh "${args[@]}"
+          if ! scripts/package.sh "${args[@]}"; then
+            echo "=== PACKAGE FAILED: dumping build logs ==="
+            find UniXNU/out -name '*.log' -type f 2>/dev/null | while read -r f; do
+              echo "===== $f ====="
+              tail -120 "$f" 2>/dev/null
+            done
+            exit 1
+          fi
       - uses: actions/cache/save@v4
         if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
         with:
