@@ -482,7 +482,6 @@ BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or
 require((BLUETOOTH / 'include/qbt.h').exists(), 'QcaBluetooth module directory')
 board_objects = []
 for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
-                    ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
                     ('AdspProbe', ()), ('AudioProbe', ()),
                     ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()),
                     # GPU power, GMU and the Metal accelerator publication (sheng-gpu-power, sheng-gpu-metal), as on iPadOS 17.
@@ -504,8 +503,6 @@ compile_c(KITS / 'AdspFirmware.c', board_dir / 'AdspFirmware.o', 'bsd/DEVELOPMEN
 board_objects.append(board_dir / 'AdspFirmware.o')
 board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-ath12k-wifi.py', WIFI, board_dir / 'ath12k-wifi'],
                                                                     text=True).splitlines() if line.startswith('OBJ ')]
-board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-qca-bluetooth.py', BLUETOOTH,
-    board_dir / 'qca-bluetooth', '--tree', ROOT], text=True).splitlines() if line.startswith('OBJ ')]
 input_objects += board_objects
 # USB device mode: the native SM8550 subclass of the original AppleUSBXDCI of this fileset.
 usb_abi = json.loads(Path(__file__).resolve().with_name('usb-xdci-24A446.json').read_text())
@@ -665,12 +662,6 @@ sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'driv
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source,
            ROOT / 'scripts' / ABI_PATH.name, keystore_source, ROOT / 'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',
            ROOT / 'scripts/hid-device-24A446.json', hid_probe]
-sources += [KITS / name for name in ('BluetoothProbe.cpp', 'BluetoothFirmware.h', 'WcnPower.h')]
-sources += [ROOT / 'scripts/build-qca-bluetooth.py', BLUETOOTH / 'tools/source-lock.json']
-sources += [Path(name) for name in json.loads((board_dir / 'qca-bluetooth/report.json').read_text())['source']]
-for directory in ('include', 'src', 'shim', 'out/linux'):
-    sources += sorted((BLUETOOTH / directory).rglob('*.h'))
-sources += [ROOT / 'kits/Sm8550Platform' / name for name in ('Sm8550GeniUart.h', 'Sm8550QupDma.h')]
 sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
 sources += [USB / 'QcomDwc3.cpp', USB / 'QcomEusb2Phy.h', USB / 'QcomQmpUsb3.h', USB / 'QcomUcsi.h', ROOT / 'scripts/usb-xdci-24A446.json', ROOT / 'scripts/usb-xhci-24A446.json']
 
