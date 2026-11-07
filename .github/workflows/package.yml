@@ -52,6 +52,19 @@ jobs:
           ref: sheng
           path: uefi-sheng
           submodules: recursive
+      - name: fix mesa turnip-frame-diagnostics patch
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('UniXNU/patches/mesa/turnip-frame-diagnostics.patch')
+          text = p.read_text()
+          old = 'diff --git a/src/freedreno/vulkan/tu_frame_diagnostic.h b/src/freedreno/vulkan/tu_frame_diagnostic.h\n--- /dev/null\n'
+          new = 'diff --git a/src/freedreno/vulkan/tu_frame_diagnostic.h b/src/freedreno/vulkan/tu_frame_diagnostic.h\nnew file mode 100644\n--- /dev/null\n'
+          if old not in text:
+              raise SystemExit('turnip-frame-diagnostics.patch: new-file marker not found')
+          p.write_text(text.replace(old, new, 1))
+          print('patched turnip-frame-diagnostics.patch: inserted new-file mode line')
+          PY
       - name: tools
         run: |
           brew install dtc llvm lld cmake mtools ninja shaderc spirv-tools bison pkgconf rustup blacktop/tap/ipsw
