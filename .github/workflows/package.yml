@@ -151,9 +151,9 @@ jobs:
           fi
           if ! scripts/package.sh "${args[@]}"; then
             echo "=== PACKAGE FAILED: dumping build logs ==="
-            find UniXNU/out -name '*.log' -type f 2>/dev/null | while read -r f; do
+            find ../UniXNU/out -name '*.log' -type f 2>/dev/null | while read -r f; do
               echo "===== $f ====="
-              tail -120 "$f" 2>/dev/null
+              grep -E "error:|fatal error:|undefined symbol|Assertion|No such file" "$f" 2>/dev/null | tail -80
             done
             exit 1
           fi
