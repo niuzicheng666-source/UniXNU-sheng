@@ -48,7 +48,8 @@ jobs:
           submodules: recursive
       - uses: actions/checkout@v4
         with:
-          repository: UniXNU/uefi-sheng
+          repository: niuzicheng666-source/uefi-sheng
+          ref: sheng
           path: uefi-sheng
           submodules: recursive
       - name: tools
@@ -94,8 +95,8 @@ jobs:
         if: inputs.os == '27'
         with:
           path: |
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
+            UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
+            UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
           key: ${{ steps.seed-key.outputs.key }}-${{ inputs.os }}
       - name: prepare preserved Data seed
         if: inputs.os == '27'
@@ -105,7 +106,7 @@ jobs:
           python3 - <<'PY'
           import hashlib, json, os, pathlib, urllib.request
           inputs = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['inputs']
-          path = pathlib.Path('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr')
+          path = pathlib.Path('UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr')
           url, digest = inputs.get('data_seed_url', ''), inputs.get('data_seed_sha256', '').lower()
           if url:
               print('::add-mask::' + url)
@@ -136,21 +137,21 @@ jobs:
           fi
           scripts/package.sh "${args[@]}"
       - uses: actions/cache/save@v4
-        if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
+        if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
         with:
           path: |
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
+            UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
+            UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
           key: ${{ steps.seed-key.outputs.key }}-${{ inputs.os }}
       - name: installation seed backup
-        if: always() && inputs.os == '27' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
+        if: always() && inputs.os == '27' && hashFiles('UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
         uses: actions/upload-artifact@v4
         with:
           name: installation-seed-${{ inputs.os }}
           retention-days: 1
           path: |
-            UniXNU/out/sheng/*/*/runtime/data.dbr
-            UniXNU/out/sheng/*/*/runtime/inputs.json
+            UniXNU/out/babylon/*/*/runtime/data.dbr
+            UniXNU/out/babylon/*/*/runtime/inputs.json
       - name: images
         uses: actions/upload-artifact@v4
         with:
@@ -158,7 +159,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            UniXNU/out/sheng/*/*/boot/boot.img
-            UniXNU/out/sheng/*/*/payload/payload.img
-            UniXNU/out/sheng/*/*/kernel/kernel.macho
-            UniXNU/out/sheng/*/*/package.manifest.json
+            UniXNU/out/babylon/*/*/boot/boot.img
+            UniXNU/out/babylon/*/*/payload/payload.img
+            UniXNU/out/babylon/*/*/kernel/kernel.macho
+            UniXNU/out/babylon/*/*/package.manifest.json
