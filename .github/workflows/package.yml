@@ -101,6 +101,11 @@ jobs:
           p.write_text(text)
           print('patched components.toml: component revisions + source_files')
           PY
+      - name: update ArmCpu submodule
+        run: |
+          cd UniXNU/drivers/ArmCpu
+          git fetch --depth 1 origin 696e09214b37640b9245b917de5d6d237222207b
+          git checkout --detach 696e09214b37640b9245b917de5d6d237222207b
       - name: tools
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
