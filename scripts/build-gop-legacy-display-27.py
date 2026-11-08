@@ -481,7 +481,7 @@ BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or
                  (ROOT / 'drivers/QcaBluetooth' if (ROOT / 'drivers/QcaBluetooth').is_dir() else DEVICE / 'drivers/QcaBluetooth'))
 require((BLUETOOTH / 'include/qbt.h').exists(), 'QcaBluetooth module directory')
 board_objects = []
-for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
+for stem, extra in [('CpuFreqProbe', ()),
                     ('AdspProbe', ()), ('AudioProbe', ()),
                     ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()),
                     # GPU power, GMU and the Metal accelerator publication (sheng-gpu-power, sheng-gpu-metal), as on iPadOS 17.
@@ -489,7 +489,7 @@ for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'inclu
                                                         'kits/Sm8550Platform') for x in ('-I', str(ROOT / d))))]:
     compile_cpp(KITS / (stem + '.cpp'), board_dir / (stem + '.o'), extra)
     board_objects.append(board_dir / (stem + '.o'))
-for stem, extra in [('WifiNet', ('-I', str(WIFI / 'include'))), ('AppleARMBacklight', ()), ('ShengBattery', ()), ('ShengAudioService', ())]:
+for stem, extra in [('AppleARMBacklight', ()), ('ShengBattery', ()), ('ShengAudioService', ())]:
     compile_cpp(KITS / (stem + '.cpp'), board_dir / (stem + '.o'), extra)
     run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', f'--globalize-symbol=__GLOBAL__sub_I_{stem}.cpp',
          board_dir / (stem + '.o'), board_dir / (stem + '.late.o')])
@@ -501,8 +501,6 @@ for stem in ('QcomMdt', 'FatVolume', 'QcomQrtr', 'ShengQrtr', 'QcomSmem', 'QcomS
 # The audio DSP's firmware file reader goes through the VFS: BSD flags.
 compile_c(KITS / 'AdspFirmware.c', board_dir / 'AdspFirmware.o', 'bsd/DEVELOPMENT/kern_exec.o.json')
 board_objects.append(board_dir / 'AdspFirmware.o')
-board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-ath12k-wifi.py', WIFI, board_dir / 'ath12k-wifi'],
-                                                                    text=True).splitlines() if line.startswith('OBJ ')]
 input_objects += board_objects
 # USB device mode: the native SM8550 subclass of the original AppleUSBXDCI of this fileset.
 usb_abi = json.loads(Path(__file__).resolve().with_name('usb-xdci-24A446.json').read_text())
