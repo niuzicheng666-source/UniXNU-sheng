@@ -153,7 +153,9 @@ jobs:
             echo "=== PACKAGE FAILED: dumping build logs ==="
             find ../UniXNU/out -name '*.log' -type f 2>/dev/null | while read -r f; do
               echo "===== $f ====="
-              grep -E "error:|fatal error:|undefined symbol|Assertion|No such file" "$f" 2>/dev/null | tail -80
+              grep -E "error:|fatal error:|Undefined symbols|undefined reference|symbol\(s\) not found|ld: |Assertion|No such file|duplicate symbol" "$f" 2>/dev/null | tail -60
+              echo "--- last lines ---"
+              tail -25 "$f" 2>/dev/null
             done
             exit 1
           fi
