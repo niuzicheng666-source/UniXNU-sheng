@@ -8,7 +8,7 @@ c_recipe = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/D
 cxx_recipe = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
 out = ROOT / 'build/adreno740'
 out.mkdir(parents=True, exist_ok=True)
-sources = [ROOT / 'kits/Sm8550Platform' / name for name in ('ShengGmu.c', 'ShengGmuCommandDb.c')]
+sources = [ROOT / 'kits/Sm8550Platform' / name for name in ('ShengGmu.c', 'ShengGmuCommandDb.c', 'Sm8550Gcc.c')]
 sources += [ROOT / 'kits/sheng/ShengGmuVotes.c']
 sources += [ROOT / 'kits/AdrenoFirmware' / name for name in
             ('AdrenoHfi.c', 'AdrenoHfiStartup.c', 'AdrenoHfiVotes.c', 'AdrenoFirmware.c')]
