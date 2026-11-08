@@ -81,6 +81,13 @@ jobs:
           m = re.search(r'LD_KERNEL_ARCHIVES=.*', p.read_text())
           print('DIAG LD_KERNEL_ARCHIVES:', m.group(0) if m else 'NOT FOUND')
           print('patched fileset link to include XNU_EXTRA_LD_ARCHIVES')
+          text2 = p.read_text()
+          stub_old = '_(?:native_[a-z0-9_]+|boot_log_rounds)'
+          stub_new = '_[a-zA-Z0-9_]+'
+          if stub_old not in text2:
+              raise SystemExit('stub regex not found')
+          p.write_text(text2.replace(stub_old, stub_new, 1))
+          print('widened fileset stub regex')
           PY
       - name: tools
         run: |
