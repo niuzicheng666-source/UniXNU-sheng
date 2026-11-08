@@ -79,6 +79,26 @@ jobs:
           p.write_text(text2.replace(stub_old, stub_new, 1))
           print('widened fileset stub regex')
           PY
+      - name: fix sm8550 platform kit (components.toml revision + source_files)
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('UniXNU/components.toml')
+          text = p.read_text()
+          for old, new in (
+              ('revision = "a9f45dc60c035084b95463781538380f4c3606c9"',
+               'revision = "97665e28578483082b674e8375a8fa65f4cf49cf"'),
+              ('source_files = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c"]',
+               'source_files = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c", "Sm8550Gcc.c"]'),
+              ('runtime_identifiers = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c"]',
+               'runtime_identifiers = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c", "Sm8550Gcc.c"]'),
+          ):
+              if old not in text:
+                  raise SystemExit('Sm8550Platform: pattern not found: ' + old)
+              text = text.replace(old, new, 1)
+          p.write_text(text)
+          print('patched components.toml: Sm8550Platform revision + source_files')
+          PY
       - name: tools
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
