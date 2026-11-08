@@ -55,8 +55,7 @@ jobs:
       - name: fix mesa turnip-frame-diagnostics patch
         run: |
           python3 - <<'PY'
-          import pathlib, os
-          print('DIAG XNU_EXTRA_LD_ARCHIVES =', repr(os.environ.get('XNU_EXTRA_LD_ARCHIVES')))
+          import pathlib
           p = pathlib.Path('UniXNU/patches/mesa/turnip-frame-diagnostics.patch')
           text = p.read_text()
           old = 'diff --git a/src/freedreno/vulkan/tu_frame_diagnostic.h b/src/freedreno/vulkan/tu_frame_diagnostic.h\n--- /dev/null\n'
@@ -72,15 +71,6 @@ jobs:
           import pathlib
           p = pathlib.Path('UniXNU/scripts/build-fileset-release-reference.py')
           text = p.read_text()
-          old = "for p in forced)]),"
-          new = "for p in forced),\n                                        os.environ.get('XNU_EXTRA_LD_ARCHIVES', '')]),"
-          if old not in text:
-              raise SystemExit('fileset LD_KERNEL_ARCHIVES marker not found')
-          p.write_text(text.replace(old, new, 1))
-          import re
-          m = re.search(r'LD_KERNEL_ARCHIVES=.*', p.read_text())
-          print('DIAG LD_KERNEL_ARCHIVES:', m.group(0) if m else 'NOT FOUND')
-          print('patched fileset link to include XNU_EXTRA_LD_ARCHIVES')
           text2 = p.read_text()
           stub_old = '_(?:native_[a-z0-9_]+|boot_log_rounds)'
           stub_new = '_[a-zA-Z0-9_]+'
