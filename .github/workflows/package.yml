@@ -65,6 +65,19 @@ jobs:
           p.write_text(text.replace(old, new, 1))
           print('patched turnip-frame-diagnostics.patch: inserted new-file mode line')
           PY
+      - name: fix fileset link to include XNU_EXTRA_LD_ARCHIVES
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('UniXNU/scripts/build-fileset-release-reference.py')
+          text = p.read_text()
+          old = "for p in forced)]),"
+          new = "for p in forced),\n                                        os.environ.get('XNU_EXTRA_LD_ARCHIVES', '')]),"
+          if old not in text:
+              raise SystemExit('fileset LD_KERNEL_ARCHIVES marker not found')
+          p.write_text(text.replace(old, new, 1))
+          print('patched fileset link to include XNU_EXTRA_LD_ARCHIVES')
+          PY
       - name: tools
         run: |
           brew install dtc llvm lld cmake mtools ninja shaderc spirv-tools bison pkgconf rustup blacktop/tap/ipsw
