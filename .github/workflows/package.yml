@@ -88,8 +88,6 @@ jobs:
           for old, new in (
               ('revision = "a9f45dc60c035084b95463781538380f4c3606c9"',
                'revision = "97665e28578483082b674e8375a8fa65f4cf49cf"'),
-              ('revision = "93a5030c5d983d0ef90f0fca93879d6e36ad1ba8"',
-               'revision = "696e09214b37640b9245b917de5d6d237222207b"'),
               ('source_files = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c"]',
                'source_files = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c", "Sm8550Gcc.c"]'),
               ('runtime_identifiers = ["ShengGmu.c", "ShengGpuSmmu.c", "ShengGmuCommandDb.c"]',
@@ -101,14 +99,28 @@ jobs:
           p.write_text(text)
           print('patched components.toml: component revisions + source_files')
           PY
-      - name: update ArmCpu submodule
+      - name: sync outdated submodules
         run: |
-          cd UniXNU/drivers/ArmCpu
-          git fetch --depth 1 origin 696e09214b37640b9245b917de5d6d237222207b
-          git checkout --detach 696e09214b37640b9245b917de5d6d237222207b
-          # A submodule with modified tracked files is left alone by the driver's
-          # update_submodules(), so pin it here without it being reset to the recorded commit.
-          printf '\n' >> README.md
+          set -e
+          # 同步过期的 submodule 到 upstream main 最新 commit，并用 git add 更新父仓库的
+          # gitlink（git index）。unixnu 驱动的 update_submodules() 会据此 checkout，
+          # 因此这里不用“本地修改标记”这类欺骗手段。
+          sync_sub() {
+            local parent="$1" sub="$2" commit="$3"
+            ( cd "$parent/$sub" && git fetch --depth 1 origin "$commit" && git checkout --detach "$commit" )
+            git -C "$parent" add "$sub"
+          }
+          # UniXNU 主仓库的 submodule（外部仓库，只能在 CI 覆盖）
+          sync_sub UniXNU drivers/ArmCpu             696e09214b37640b9245b917de5d6d237222207b
+          sync_sub UniXNU drivers/RamBlock           93dd9afcd7d42c6ce59e2f12dc69c2ce273aa391
+          sync_sub UniXNU drivers/AdrenoMetal         da7aedd827dfdb581eac041615c45cc1cd5e71db
+          sync_sub UniXNU drivers/AppleKeyStoreState 58e5461ed3b751e4c91426b72d8686419abe9550
+          sync_sub UniXNU drivers/QcomBaseband        dd0199cf3300764ed52b23f4a47761f91fab21a2
+          sync_sub UniXNU kits/XnuPrelink             9b950f2e104da77f494e8f2735c6f044f0e4db4d
+          # device 仓库的 submodule（同样统一同步，保持一致性）
+          sync_sub device drivers/Ath12kWifi          52fcbe46279857111af7d2a6470a47ffcab7a97d
+          sync_sub device drivers/ShengNovatekTouch   69fdd6223ed2572aa8bd8351e77c53a238276130
+          sync_sub device drivers/ShengUfs            a901555e540f4ff3a69a7221a8f7a0be7db4f56b
       - name: tools
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
