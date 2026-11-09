@@ -118,7 +118,7 @@ thin-bezel = 1
 [adt.defaults.u32]
 sleep-disabled = 1
 vmm-present = 1
-kern.maxvnodes = 78848
+"kern.maxvnodes" = 78848
 
 [adt.chosen.u32]
 kernel-ctrr-to-be-enabled = 0
