@@ -106,6 +106,9 @@ jobs:
           cd UniXNU/drivers/ArmCpu
           git fetch --depth 1 origin 696e09214b37640b9245b917de5d6d237222207b
           git checkout --detach 696e09214b37640b9245b917de5d6d237222207b
+          # A submodule with modified tracked files is left alone by the driver's
+          # update_submodules(), so pin it here without it being reset to the recorded commit.
+          printf '\n' >> README.md
       - name: tools
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
