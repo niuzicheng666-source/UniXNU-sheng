@@ -72,7 +72,7 @@ jobs:
           p = pathlib.Path('UniXNU/scripts/build-fileset-release-reference.py')
           text = p.read_text()
           text2 = p.read_text()
-          stub_old = '_(?:native_[a-z0-9_]+|boot_log_rounds)'
+          stub_old = '_(?:native_[a-z0-9_]+|boot_log_rounds|boot_cache_input_capture)'
           stub_new = '_[a-zA-Z0-9_]+'
           if stub_old not in text2:
               raise SystemExit('stub regex not found')
