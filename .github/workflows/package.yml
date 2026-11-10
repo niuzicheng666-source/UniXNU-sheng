@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: niuzicheng666-source/UniXNU
-          ref: 44a9c45918455a6d2f3a5ea346ae56ec8512419d # fork of 82b847c4, turnip-frame-diagnostics.patch removed
+          ref: dfb3978eb92da8c1c9e5420a40b476a8d281d221 # fork of 82b847c4, full 17-patch Mesa series
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
