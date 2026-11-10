@@ -29,7 +29,7 @@ config = "sheng"
 # babylonPkg carries the 16GB MemoryMapLib; ConfigurationMapLib and Drivers reuse shengPkg.
 dsc = "Platforms/Xiaomi/babylonPkg/babylon.dsc"
 fd = "Build/babylonPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-preflight = ["scripts/fetch-babylon-dts.py", "scripts/download-sheng-firmware.py", "scripts/extract-sheng-firmware.py --delete-archive", "scripts/import-sheng-uefi.py", "scripts/check-sheng.py"]
+preflight = ["scripts/download-sheng-firmware.py", "scripts/extract-sheng-firmware.py --delete-archive", "scripts/fetch-babylon-abldtb.py", "scripts/import-sheng-uefi.py", "scripts/check-sheng.py"]
 submodules = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 patches = ["Resources/MuPatches/Gic-Spurious.patch"]
 packages = ["{uefi}", "{uefi}/Platforms/Xiaomi", "{tree}/package", "{tree}/drivers/DarwinBoot", "{edk2}", "{uefi}/Common/Mu", "{uefi}/Common/Mu_OEM_Sample", "{uefi}/Silicon/Qualcomm", "{uefi}/Silicon/Silicium", "{uefi}/Silicium-ACPI", "{uefi}/Silicium-ACPI/Platforms/Xiaomi", "{uefi}/Silicium-ACPI/Silicon/Qualcomm"]
