@@ -27,7 +27,7 @@ if retained.is_file():
         print(f'firmware inputs already extracted from {URL.rsplit("/", 1)[1]}')
         raise SystemExit(0)
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--connections', type=int, default=32)
+parser.add_argument('--connections', type=int, default=8)
 args = parser.parse_args()
 if not 1 <= args.connections <= 64:
     parser.error('Use between 1 and 64 connections')
@@ -87,7 +87,7 @@ def persist():
 def fetch(index):
     begin = index * chunk_size
     end = min(size, begin + chunk_size)
-    for attempt in range(4):
+    for attempt in range(8):
         if stop.is_set():
             raise RuntimeError('Download cancelled after another range failed')
         try:
@@ -117,11 +117,16 @@ def fetch(index):
                 if len(state['completed']) % 8 == 0 or len(state['completed']) >= count - 32:
                     persist()
             return end - begin
-        except Exception:
-            if attempt == 3:
+        except Exception as error:
+            if attempt == 7:
                 stop.set()
                 raise
-            time.sleep(0.5 * (attempt + 1))
+            # Errno 55 (ENOBUFS) means the kernel ran out of socket buffer space
+            # while the parallel range workers were pulling 8 MiB each; it needs a
+            # longer pause than an interrupted read or a slow range.
+            backoff = min(30, 2 ** attempt) if 'buffer space' in str(error) else min(10, 0.5 * 2 ** attempt)
+            print(f'range {index} attempt {attempt + 1}/8 failed: {error}; retrying in {backoff:.1f}s', flush=True)
+            time.sleep(backoff)
 
 
 try:
