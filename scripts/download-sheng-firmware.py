@@ -35,13 +35,30 @@ directory.mkdir(parents=True, exist_ok=True)
 target = directory / URL.rsplit('/', 1)[1]
 partial = target.with_suffix('.tgz.part')
 state_path = target.with_suffix('.tgz.ranges.json')
-request = urllib.request.Request(URL, headers={'Range': 'bytes=0-0'})
-with urllib.request.urlopen(request, timeout=30) as response:
-    match = re.fullmatch(r'bytes 0-0/(\d+)', response.headers.get('Content-Range', ''))
-    if response.status != 206 or not match or response.read() != b'\x1f':
-        raise SystemExit('Expected a ranged gzip response; refusing a whole-body fallback')
-    size = int(match[1])
-    etag = response.headers.get('ETag')
+def probe():
+    request = urllib.request.Request(URL, headers={'Range': 'bytes=0-0'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        match = re.fullmatch(r'bytes 0-0/(\d+)', response.headers.get('Content-Range', ''))
+        if response.status != 206 or not match or response.read() != b'\x1f':
+            raise SystemExit('Expected a ranged gzip response; refusing a whole-body fallback')
+        return int(match[1]), response.headers.get('ETag')
+
+
+# The hosted runner's resolver intermittently drops the CDN name (Errno 8) on the
+# first try. The per-range workers already retry; this first probe did not, and a
+# single transient lookup took the whole firmware preflight down with it.
+size = etag = None
+for attempt in range(6):
+    try:
+        size, etag = probe()
+        break
+    except SystemExit:
+        raise
+    except Exception as error:
+        if attempt == 5:
+            raise SystemExit(f'firmware CDN probe failed after 6 attempts: {error}')
+        print(f'firmware CDN probe attempt {attempt + 1}/6 failed: {error}', flush=True)
+        time.sleep(2 ** attempt)
 chunk_size = 8 * 1024 * 1024
 count = (size + chunk_size - 1) // chunk_size
 state = {'url': URL, 'bytes': size, 'etag': etag, 'chunk_bytes': chunk_size, 'completed': {}}
