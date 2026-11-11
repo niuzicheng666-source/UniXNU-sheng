@@ -21,13 +21,13 @@ feeds.update_submodules() skips a submodule with local changes ("under local
 development; leave its checkout alone"), so this edit survives the package step
 instead of being reset to the recorded commit.
 
-usage: apply-shengufs-root-base.py [PATH_TO_ShengUfs]   (default: UniXNU/drivers/ShengUfs)
+usage: apply-shengufs-root-base.py [PATH_TO_ShengUfs]   (default: drivers/ShengUfs, the device submodule)
 Idempotent: a second run reports that it is already applied and exits 0.
 """
 import sys
 from pathlib import Path
 
-DEFAULT = 'UniXNU/drivers/ShengUfs'
+DEFAULT = 'drivers/ShengUfs'
 
 LAYOUT_EDITS = [
     # 1. the signature gains the optional base override
