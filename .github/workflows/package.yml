@@ -209,6 +209,11 @@ jobs:
           INIT_DATA: ${{ inputs.init_data }}
           OS_PROFILE: ${{ inputs.os }}
         run: |
+          # Move the UniXNU root manifest off the first block of userdata: on a phone that
+          # still boots Android that block holds the f2fs superblock, so startRoot always
+          # rejected it. Editing the submodule's tracked files makes update_submodules()
+          # leave the checkout alone ("under local development"), so the change survives.
+          python3 scripts/apply-shengufs-root-base.py ../UniXNU/drivers/ShengUfs
           args=(--os "$OS_PROFILE" --uefi ../uefi-sheng)
           if [ "$OS_PROFILE" = 27 ] && [ "$INIT_DATA" = true ]; then
             args+=(--init-data)
