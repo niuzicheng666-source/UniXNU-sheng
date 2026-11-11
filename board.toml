@@ -8,34 +8,41 @@ kit = "sheng"
 soc_source = "sm8550"
 os_profile = "ipados-27.0.1-24A446"
 
-# babylon userdata: the partition starts at LBA 3094592 (4096-byte LBA) and runs to
-# LBA 124322810 (969825752 x 512B sectors = 121228219 x 4096B LBAs, 462.29 GiB).
+# babylon userdata: 4 KiB LBAs 3094592 .. 124322810 = 121228219 blocks = 462.45 GiB.
 #
-# Android keeps its f2fs on the whole partition, so the root manifest cannot go at the
-# partition start (that block is the f2fs superblock: startRoot rejects it with
-# "root step 3: root manifest rejected"). It goes 400 GiB in instead, leaving 217 GiB
-# of headroom before f2fs's append-only allocation could ever reach it, and 62 GiB of
-# tail for the root image plus the persistent Data store, which ShengUfs places just
-# below the last 32 MiB diagnostic log. `native-ufs-root-base` in [payload] kernel_args
-# tells the driver to read there; the driver's own default stays at the partition start.
-# babylon userdata: the partition runs from LBA 3094592 to LBA 124322810
-# (969825752 x 512B sectors = 121228219 x 4096B LBAs = 462.29 GiB).
+# Android keeps its f2fs across the partition, so the root manifest cannot sit at the
+# partition start: that block holds the f2fs superblock and startRoot rejects it with
+# "root step 3: root manifest rejected".
 #
-# Android keeps its f2fs across the whole partition, so the UniXNU root manifest cannot sit
-# at the partition start: that block is the f2fs superblock and startRoot rejects it with
-# "root step 3: root manifest rejected". It goes 400 GiB in instead (root_lba) -- 217 GiB
-# of growth headroom before f2fs's append-only allocation could reach it, and 62 GiB of tail
-# for the root image plus the persistent Data store that ShengUfs places just below the last
-# 32 MiB diagnostic log. [payload] kernel_args carries native-ufs-root-base so the driver
-# reads there; the driver's own default stays at the partition start.
+# Two schemes were tried on hardware. A pinned f2fs file (the zizhan recipe) does not
+# work here: this kernel accepts F2FS_IOC_SET_PIN_FILE and sets the pin flag, but
+# GET_PIN_FILE still reads 0, and a 12 GiB fallocate produced 894 extents (largest
+# 2.9 GiB). ShengUfs reads consecutive absolute LBAs through READ(10), so a fragmented
+# file cannot back a window. Instead the filesystem itself was shrunk online with
+# F2FS_IOC_RESIZE_FS from 462.45 GiB to 340 GiB (block_count 89129403, so abs LBA
+# 3094592+89129403-1 is the last f2fs block). Everything past that is permanently
+# outside f2fs -- the kernel refuses to grow a filesystem back -- and reads as zeros, so
+# the tail is a contiguous 122.45 GiB region that no Android allocation or GC can enter.
+# root_lba is the first block of it, +5 blocks of slack so it is MiB aligned.
 #
-# The root image is written at root_lba, NOT with "fastboot flash userdata" (that would
-# overwrite the f2fs superblock and cost the Android installation).
+# Layout of that tail (view = last_lba - root_lba + 1 = 32098811 blocks = 122.45 GiB):
+#   1 MiB manifest pad, OS window 9.61 GB, SystemOS window 6.02 GB, then the two
+#   OS.vroot/SystemOS.vroot hash-table objects (15.75 GB in all = 14.67 GiB),
+#   then the persistent Data store (data_gib), then the last 1024 MiB kept for the
+#   diagnostic log. data_gib = 96 leaves 25.4 GiB between the image and the store.
+#
+# The root image is written at root_lba with a streaming dd, NOT with
+# "fastboot flash userdata" (that would overwrite the f2fs superblock and cost the
+# Android installation).
 [userdata]
 first_lba = 3094592
 last_lba = 124322810
 lba_bytes = 4096
-root_lba = 107952192
+root_lba = 92224000
+# OS only for the first root boot: the SystemOS window would double every transfer
+# (6.02 GB image + 47 MB hash table) before the OS window itself is known to work.
+# Arrays replace the OS profile's, so this is the whole window list.
+windows = [{ name = "OS", component = "OS" }]
 
 [kernel]
 defconfig = "sheng_ipados27_defconfig"
@@ -79,13 +86,13 @@ title = "Boot"
 dram_size = "0x80000000"
 skip_setup_tool = "scripts/seed-data-skip-setup.py"
 panic_screen = true
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root-base=107952192", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "sheng-aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "sheng-log=1", "sheng-smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "sheng-data-persist=2", "sheng-adsp=2", "sheng-audio=12", "sheng-wifi=5", "sheng-bluetooth=1", "sheng-backlight=1", "sheng-cpufreq=4", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-fb-bgra=1", "sheng-dpu-scanout=2", "sheng-no-lc=1", "sheng-vsync=120", "sheng-vsync-fixed=1", "sheng-gpu-dcvs=1", "sheng-disable-watchdogd=1", "sheng-lite=1", "sheng-gpu-addon=1", "sheng-usb=1", "appsync=1"]
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root-base=92224000", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "sheng-aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "sheng-log=1", "sheng-smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "sheng-data-persist=2", "sheng-adsp=2", "sheng-audio=12", "sheng-wifi=5", "sheng-bluetooth=1", "sheng-backlight=1", "sheng-cpufreq=4", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-fb-bgra=1", "sheng-dpu-scanout=2", "sheng-no-lc=1", "sheng-vsync=120", "sheng-vsync-fixed=1", "sheng-gpu-dcvs=1", "sheng-disable-watchdogd=1", "sheng-lite=1", "sheng-gpu-addon=1", "sheng-usb=1", "appsync=1"]
 
 [payload.runtime]
 tool = "scripts/build-boot-runtime.py"
 target = "ios27"
 build = "24A446"
-data_gib = 215
+data_gib = 96
 skip_setup = true
 trust_components = ["StaticTrustCache", "Cryptex1,SystemTrustCache", "Cryptex1,AppTrustCache"]
 wallpapers = ["ipados27", "ipados27-floating"]
