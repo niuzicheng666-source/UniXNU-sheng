@@ -102,13 +102,19 @@ jobs:
       - name: sync outdated submodules
         run: |
           set -e
-          # 鍚屾杩囨湡鐨?submodule 鍒?upstream main 鏈€鏂?commit锛屽苟鐢?git add 鏇存柊鐖朵粨搴撶殑
-          # gitlink锛坓it index锛夈€倁nixnu 椹卞姩鐨?update_submodules() 浼氭嵁姝?checkout锛?          # 鍥犳杩欓噷涓嶇敤鈥滄湰鍦颁慨鏀规爣璁扳€濊繖绫绘楠楁墜娈点€?          sync_sub() {
+          # 同步过期的 submodule 到 upstream main 最新 commit，并用 git add 更新父仓库的
+          # gitlink（git index）。unixnu 驱动的 update_submodules() 会据此 checkout，
+          # 因此这里不用“本地修改标记”这类欺骗手段。
+          sync_sub() {
             local parent="$1" sub="$2" commit="$3"
             ( cd "$parent/$sub" && git fetch --depth 1 origin "$commit" && git checkout --detach "$commit" )
             git -C "$parent" add "$sub"
           }
-          # 鍙悓姝ョ湡姝ｉ渶瑕佲€滄柊鎺ュ彛/鏂板姛鑳解€濈殑 submodule锛涘叾浣欎繚鎸?pinned锛堝畠浠?main 涓婂鏄?docs 鏇存柊锛?          # 鍗曠嫭鍚屾鍙兘鐮村潖涓?UniXNU 涓讳粨搴撴瀯寤鸿剼鏈殑閰嶅鍏崇郴锛屼緥濡?AdrenoMetal 鐨?patch 璺緞锛夈€?          # - ArmCpu锛歛rmcpu_spi_mask/share锛堝唴鏍搁摼鎺ュ繀闇€锛?          # - XnuPrelink锛歞ependency_closure 瀵?"!" 鎺掗櫎椤圭殑鏀寔锛坆oard.toml prelink roots 鐢ㄤ簡 !AppleSMC锛?          sync_sub UniXNU drivers/ArmCpu 696e09214b37640b9245b917de5d6d237222207b
+          # 只同步真正需要“新接口/新功能”的 submodule；其余保持 pinned（它们 main 上多是 docs 更新，
+          # 单独同步可能破坏与 UniXNU 主仓库构建脚本的配套关系，例如 AdrenoMetal 的 patch 路径）。
+          # - ArmCpu：armcpu_spi_mask/share（内核链接必需）
+          # - XnuPrelink：dependency_closure 对 "!" 排除项的支持（board.toml prelink roots 用了 !AppleSMC）
+          sync_sub UniXNU drivers/ArmCpu 696e09214b37640b9245b917de5d6d237222207b
           sync_sub UniXNU kits/XnuPrelink 9b950f2e104da77f494e8f2735c6f044f0e4db4d
       - name: tools
         run: |
