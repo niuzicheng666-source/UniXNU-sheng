@@ -8,12 +8,34 @@ kit = "sheng"
 soc_source = "sm8550"
 os_profile = "ipados-27.0.1-24A446"
 
+# babylon userdata: the partition starts at LBA 3094592 (4096-byte LBA) and runs to
+# LBA 124322810 (969825752 x 512B sectors = 121228219 x 4096B LBAs, 462.29 GiB).
+#
+# Android keeps its f2fs on the whole partition, so the root manifest cannot go at the
+# partition start (that block is the f2fs superblock: startRoot rejects it with
+# "root step 3: root manifest rejected"). It goes 400 GiB in instead, leaving 217 GiB
+# of headroom before f2fs's append-only allocation could ever reach it, and 62 GiB of
+# tail for the root image plus the persistent Data store, which ShengUfs places just
+# below the last 32 MiB diagnostic log. `native-ufs-root-base` in [payload] kernel_args
+# tells the driver to read there; the driver's own default stays at the partition start.
+# babylon userdata: the partition runs from LBA 3094592 to LBA 124322810
+# (969825752 x 512B sectors = 121228219 x 4096B LBAs = 462.29 GiB).
+#
+# Android keeps its f2fs across the whole partition, so the UniXNU root manifest cannot sit
+# at the partition start: that block is the f2fs superblock and startRoot rejects it with
+# "root step 3: root manifest rejected". It goes 400 GiB in instead (root_lba) -- 217 GiB
+# of growth headroom before f2fs's append-only allocation could reach it, and 62 GiB of tail
+# for the root image plus the persistent Data store that ShengUfs places just below the last
+# 32 MiB diagnostic log. [payload] kernel_args carries native-ufs-root-base so the driver
+# reads there; the driver's own default stays at the partition start.
+#
+# The root image is written at root_lba, NOT with "fastboot flash userdata" (that would
+# overwrite the f2fs superblock and cost the Android installation).
 [userdata]
-# babylon userdata: start_sector 3094592 (4096-byte LBA), extends to disk end.
-# 512GB device: userdata = 969825752 x 512B sectors = 121228219 x 4096B LBAs.
 first_lba = 3094592
 last_lba = 124322810
 lba_bytes = 4096
+root_lba = 107952192
 
 [kernel]
 defconfig = "sheng_ipados27_defconfig"
@@ -57,7 +79,7 @@ title = "Boot"
 dram_size = "0x80000000"
 skip_setup_tool = "scripts/seed-data-skip-setup.py"
 panic_screen = true
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "sheng-aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "sheng-log=1", "sheng-smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "sheng-data-persist=2", "sheng-adsp=2", "sheng-audio=12", "sheng-wifi=5", "sheng-bluetooth=1", "sheng-backlight=1", "sheng-cpufreq=4", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-fb-bgra=1", "sheng-dpu-scanout=2", "sheng-no-lc=1", "sheng-vsync=120", "sheng-vsync-fixed=1", "sheng-gpu-dcvs=1", "sheng-disable-watchdogd=1", "sheng-lite=1", "sheng-gpu-addon=1", "sheng-usb=1", "appsync=1"]
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root-base=107952192", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "sheng-aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "sheng-log=1", "sheng-smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "sheng-data-persist=2", "sheng-adsp=2", "sheng-audio=12", "sheng-wifi=5", "sheng-bluetooth=1", "sheng-backlight=1", "sheng-cpufreq=4", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-fb-bgra=1", "sheng-dpu-scanout=2", "sheng-no-lc=1", "sheng-vsync=120", "sheng-vsync-fixed=1", "sheng-gpu-dcvs=1", "sheng-disable-watchdogd=1", "sheng-lite=1", "sheng-gpu-addon=1", "sheng-usb=1", "appsync=1"]
 
 [payload.runtime]
 tool = "scripts/build-boot-runtime.py"
