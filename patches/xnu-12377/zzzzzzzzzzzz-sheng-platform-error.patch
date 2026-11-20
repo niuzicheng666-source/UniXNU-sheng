@@ -1,0 +1,28 @@
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index 0554aa8..eba2fd0 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -550,8 +550,21 @@ __dead2 __unused
+ static void
+ arm64_implementation_specific_error(arm_saved_state_t *state, uint64_t esr, vm_offset_t far)
+ {
+-#pragma unused (state, esr, far)
+-	panic_plain("Unhandled implementation specific error\n");
++	/*
++	 * babylon bring-up: the stock message discards the syndrome and the
++	 * fault address, so an external abort, a parity error and a table-walk
++	 * fault cannot be told apart on the screen or in the boot log.  Print
++	 * esr (with EC and DFSC/ISS decoded), far, pc and lr so the failing
++	 * access can be localised.  arm64_platform_error() calls this only
++	 * when is_platform_error(esr) holds and no platform handler exists.
++	 */
++	panic_plain("Unhandled implementation specific error:"
++	    " esr=%#llx far=%#llx pc=%#llx lr=%#llx ec=%u dfsc=%#x\n",
++	    (unsigned long long)esr, (unsigned long long)far,
++	    (unsigned long long)get_saved_state_pc(state),
++	    (unsigned long long)get_saved_state_lr(state),
++	    (unsigned)((esr >> 26) & 0x3f),
++	    (unsigned)(esr & 0x3f));
+ }
+ 
+ #if CONFIG_KERNEL_INTEGRITY
