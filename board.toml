@@ -115,12 +115,14 @@ confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
 
 [payload.adt]
 chip_id = "8142"
-# Diagnostic: 8 GiB is the parser's upper bound, so AllocateWindow cannot find a run this
-# large and DarwinBoot draws its memory map on the panel instead of booting: "NO WINDOW
-# <size> BIG RUN <bytes> @ <address>" plus up to seven "FREE <base> + <size>" rows. The
-# firmware stays resident, and sheng-usb=1 leaves fastboot reachable. Revert to
-# 0x130000000 once the map is read.
-owned_memory_size = "0x200000000"
+# 1 GiB keeps the window inside the low DRAM bank that the ADT describes
+# (dram-base 0x80000000, dram-size 2 GiB from the hardware DTS) instead of the high
+# bank at 0x8c0000000. An 8 GiB window allocated and passed ExitBootServices but the
+# kernel never produced output; a 4.75 GiB window booted to 78 s and then took a
+# synchronous external abort. Both sizes are larger than any contiguous run in the low
+# bank, so AllocateWindow placed them in the high bank, outside the range the ADT
+# declares. Large enough for XNU (the qemu probes boot on 512 MiB).
+owned_memory_size = "0x40000000"
 packed_data_ramdisk = true
 persistent_data = true
 unique_chip_id = "required"
