@@ -114,8 +114,10 @@ jobs:
           # 单独同步可能破坏与 UniXNU 主仓库构建脚本的配套关系，例如 AdrenoMetal 的 patch 路径）。
           # - ArmCpu：armcpu_spi_mask/share（内核链接必需）
           # - XnuPrelink：dependency_closure 对 "!" 排除项的支持（board.toml prelink roots 用了 !AppleSMC）
+          # - DarwinBoot：走 darwinboot-memory-excluded 配上 AllocateSpan（远 bank 与空洞必需）
           sync_sub UniXNU drivers/ArmCpu 696e09214b37640b9245b917de5d6d237222207b
           sync_sub UniXNU kits/XnuPrelink 9b950f2e104da77f494e8f2735c6f044f0e4db4d
+          sync_sub UniXNU drivers/DarwinBoot a2cfbe4fbe6e234a85f426f6067c32839ee01e39
       - name: tools
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
