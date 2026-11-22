@@ -30,7 +30,13 @@
          * window and scans the UEFI map inside it, never dram-size. So enlarging this value
          * cannot make DarwinWindowExclusions find ranges, and the sibling window.holes are
          * carried by darwinboot-memory-excluded alone. Keep it equal to board.toml dram_size:
-         * devicetree.py refuses the build when the two differ. */
+         * devicetree.py refuses the build when the two differ.
+         *
+         * Writing a size that does not fit one cell is a trap: the root node is
+         * #size-cells = <2>, so a range is four cells, and 0x400000000 written as a single
+         * cell is truncated by dtc to 0x0. The DTS then declares zero-length DRAM while
+         * board.toml still says 16 GiB, and the build dies in packaging on
+         * "payload.dram_size differs from the hardware DTS". */
         reg = <0x0 0x80000000 0x0 0x80000000>;
     };
 

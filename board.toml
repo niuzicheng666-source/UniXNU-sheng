@@ -119,9 +119,16 @@ chip_id = "8142"
 # before any kernel output and 1 GiB booted but aborted at 79 s. Window size turned out
 # not to be the variable -- all three sizes abort at the same instruction, at the same
 # offset inside kmem_data_shared_range (ESR DFSC=0x10: the page translated, the physical
-# address is not backed). With the excluded table present, DarwinBoot allocates only the
-# head and marks the rest of the window as unusable, which is what makes a window larger
-# than the low bank's largest run work.
+# address is not backed).
+#
+# Setting owned_memory_size emits darwinboot-memory-excluded, which makes DarwinBoot take
+# AllocateSpan instead of AllocateWindow: it allocates only the head (image plus
+# max(span / 64, 32 MiB) for the kernel's boot tables) and writes the rest of the window
+# as excluded ranges. That is the loader half only. The kernel half -- arm_vm_init.c
+# reading the property into a sorted list, pmap_next_page_hi stepping over it,
+# pmap_startup marking those page-array entries instead of releasing them -- is NOT in
+# this build, so XNU still pages the holes and still aborts. Do not read the comment
+# above as "fixed": the table is emitted and filled, and nothing consumes it.
 owned_memory_size = "0x130000000"
 packed_data_ramdisk = true
 persistent_data = true
