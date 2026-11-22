@@ -150,22 +150,6 @@ def main():
                           if (args.data_ramdisk or args.packed_data_ramdisk) and not args.persistent_data else []),
                         *( [('darwinboot-memory-size', struct.pack('<Q', args.owned_memory_size))]
                            if args.owned_memory_size else [] ),
-                        # Slots the loader fills with the ranges of the window XNU must not use
-                        # (drivers/DarwinBoot/DarwinBootPkg/Driver/MemoryWindow.h). The property must be
-                        # present, 16-byte aligned in length and all zero, or the loader rejects the tree:
-                        # it writes ascending (base, size) pairs here and leaves unused slots zeroed.
-                        #
-                        # babylon needs this. Its DRAM is not one run: the span Darwin is told it owns
-                        # (dram-base 0x80000000 + owned_memory_size) covers 4.75 GiB while real RAM below
-                        # 0x1b0000000 stops at 0xd4cfffff, leaving a 3.4 GiB gap at the tail. Without the
-                        # property XNU builds page tables over that gap, which answers the first touch with
-                        # a synchronous external abort (esr ISS DFSC=0x10, far inside kmem_ptr_range_0,
-                        # originally seen at QcomDwc3Xdci::prepareDefaults).
-                        # 16 slots covers the 9 ranges this board produces with room to spare; a window
-                        # with more excluded ranges than slots merges the neighbours with the least
-                        # usable memory between them, so an overrun costs memory rather than correctness.
-                        *([('darwinboot-memory-excluded', bytes(16 * 16))]
-                          if args.owned_memory_size else [] ),
                         ('dram-base', struct.pack('<Q', DRAM_BASE)),
                         ('dram-size', struct.pack('<Q', args.dram_size)),
                         # Image4 hash algorithm. The target iPad's DT specifies sha2-384 in /chosen; this
