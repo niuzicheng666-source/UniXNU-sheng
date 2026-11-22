@@ -115,14 +115,14 @@ confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
 
 [payload.adt]
 chip_id = "8142"
-# 1 GiB keeps the window inside the low DRAM bank that the ADT describes
-# (dram-base 0x80000000, dram-size 2 GiB from the hardware DTS) instead of the high
-# bank at 0x8c0000000. An 8 GiB window allocated and passed ExitBootServices but the
-# kernel never produced output; a 4.75 GiB window booted to 78 s and then took a
-# synchronous external abort. Both sizes are larger than any contiguous run in the low
-# bank, so AllocateWindow placed them in the high bank, outside the range the ADT
-# declares. Large enough for XNU (the qemu probes boot on 512 MiB).
-owned_memory_size = "0x40000000"
+# 4.75 GiB is the sheng value and the only size that reaches the kernel: 8 GiB stopped
+# before any kernel output and 1 GiB booted but aborted at 79 s. Window size turned out
+# not to be the variable -- all three sizes abort at the same instruction, at the same
+# offset inside kmem_data_shared_range (ESR DFSC=0x10: the page translated, the physical
+# address is not backed). With the excluded table present, DarwinBoot allocates only the
+# head and marks the rest of the window as unusable, which is what makes a window larger
+# than the low bank's largest run work.
+owned_memory_size = "0x130000000"
 packed_data_ramdisk = true
 persistent_data = true
 unique_chip_id = "required"
