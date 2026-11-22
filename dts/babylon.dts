@@ -25,7 +25,13 @@
 
     memory@80000000 {
         device_type = "memory";
-        reg = <0x0 0x80000000 0x0 0x80000000>;
+        /* The device's whole DRAM span, not just the low bank: banks are 0x80000000 + 2 GiB and
+         * 0x880000000 + 14 GiB. The ADT carries dram-base/dram-size as one pair, so this has to
+         * cover the span the loader's window lands in -- DarwinWindowExclusions walks the UEFI
+         * map up to dram-base + dram-size, and a size below the window made it stop at the low
+         * bank's edge with zero ranges found, so the window kept its holes and XNU aborted on
+         * the first one (DFSC=0x10). */
+        reg = <0x0 0x80000000 0x0 0x400000000>;
     };
 
     reserved-memory {
