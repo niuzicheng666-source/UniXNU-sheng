@@ -25,13 +25,13 @@
 
     memory@80000000 {
         device_type = "memory";
-        /* The device's whole DRAM span, not just the low bank: banks are 0x80000000 + 2 GiB and
-         * 0x880000000 + 14 GiB. The ADT carries dram-base/dram-size as one pair, so this has to
-         * cover the span the loader's window lands in -- DarwinWindowExclusions walks the UEFI
-         * map up to dram-base + dram-size, and a size below the window made it stop at the low
-         * bank's edge with zero ranges found, so the window kept its holes and XNU aborted on
-         * the first one (DFSC=0x10). */
-        reg = <0x0 0x80000000 0x0 0x400000000>;
+        /* The low bank the ADT describes. This pair is not what bounds the loader's exclusion
+         * walk: DarwinBoot reads darwinboot-memory-size (payload.adt owned_memory_size) for the
+         * window and scans the UEFI map inside it, never dram-size. So enlarging this value
+         * cannot make DarwinWindowExclusions find ranges, and the sibling window.holes are
+         * carried by darwinboot-memory-excluded alone. Keep it equal to board.toml dram_size:
+         * devicetree.py refuses the build when the two differ. */
+        reg = <0x0 0x80000000 0x0 0x80000000>;
     };
 
     reserved-memory {
