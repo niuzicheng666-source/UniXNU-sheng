@@ -124,11 +124,15 @@ extern volatile uint32_t native_ufs_probe_calls __attribute__((weak_import)), na
 extern volatile uint32_t native_ufs_root_step __attribute__((weak_import));
 extern const char *volatile native_ufs_root_failure __attribute__((weak_import));
 // The Virtio block path only exists in the profiles that select CONFIG_XNU_NATIVE_VIRTIO_BLOCK (iOS 17). The source
-// storage profiles (26/27) link this file without it, so these are weak and read only when their address is non-null.
-extern volatile uint32_t native_virtio_ready __attribute__((weak_import));
-extern volatile uint32_t native_virtio_read_requests __attribute__((weak_import));
-extern volatile uint32_t native_virtio_read_failures __attribute__((weak_import));
-extern volatile uint64_t native_virtio_verified_blocks __attribute__((weak_import));
+// storage profiles (26/27) do not link that driver at all. weak_import does not help here: it binds lazily only
+// against a dynamic library, while the kernel is linked statically, so ld still reports these four as undefined and
+// fails the link. Guard the references on the personality macro the build script already sets for that driver.
+#ifdef XNU_NATIVE_VIRTIO_BLOCK
+extern volatile uint32_t native_virtio_ready;
+extern volatile uint32_t native_virtio_read_requests;
+extern volatile uint32_t native_virtio_read_failures;
+extern volatile uint64_t native_virtio_verified_blocks;
+#endif
 extern void native_ufs_progress_text(char *, size_t);
 extern unsigned int vm_page_free_count;
 extern unsigned int vm_page_active_count,vm_page_inactive_count,vm_page_wire_count,vm_page_speculative_count;
@@ -272,8 +276,13 @@ static void draw(unsigned now) {
   snprintf(b,sizeof(b),"time=%us idle=%us IRQ=%llu monitor=%llu lost=%u root=%d procs=%d free=%u",
     now, now-visible->activity_at, irq_count, thread_count, visible->dropped,
     native_owner_root_accepted, nprocs, vm_page_free_count); line(1,b,0xffffffff);
+#ifdef XNU_NATIVE_VIRTIO_BLOCK
+  int virtio_offline = native_virtio_ready && !native_ufs_blocks_published;
+#else
+  int virtio_offline = 0;
+#endif
   snprintf(b,sizeof(b),"%s requests=%llu verified4K=%llu failures=%llu integrity=%u published=%u",
-    &native_virtio_ready && native_virtio_ready && !native_ufs_blocks_published ? "OFFLINE VIRTIO" : "UFS",
+    virtio_offline ? "OFFLINE VIRTIO" : "UFS",
     visible->reads,visible->verified,visible->failures,native_ufs_integrity_failures,native_ufs_blocks_published);
   if(&native_ufs_root_step && !native_ufs_blocks_published) {
     // Nothing published yet: how far the root start got (probe calls, match, step, last soft-failure reason).
@@ -751,11 +760,25 @@ void boot_progress_irq(uint64_t pc,uint64_t psr,uint64_t sp) {
 void boot_progress_poll(void) {
   if (!enabled || state.frozen || !take()) return;
   unsigned now=seconds();
-  unsigned offline=&native_virtio_ready && native_virtio_ready && !native_ufs_blocks_published;
-  unsigned reason=bp_poll(&state,now,
-    offline ? native_virtio_read_requests : __atomic_load_n(&native_ufs_block_reads,__ATOMIC_RELAXED),
-    offline ? native_virtio_verified_blocks : __atomic_load_n(&native_ufs_verified_blocks,__ATOMIC_RELAXED),
-    offline ? native_virtio_read_failures : __atomic_load_n(&native_ufs_block_failures,__ATOMIC_RELAXED));
+  // The whole expression has to sit inside the guard, not just a runtime flag: selecting with a constant condition
+  // still emits a relocation for every symbol named. Only iOS 17 links the Virtio block driver.
+#ifdef XNU_NATIVE_VIRTIO_BLOCK
+  unsigned long long reads, verified, failures;
+  if (native_virtio_ready && !native_ufs_blocks_published) {
+    reads = native_virtio_read_requests;
+    verified = native_virtio_verified_blocks;
+    failures = native_virtio_read_failures;
+  } else {
+    reads = __atomic_load_n(&native_ufs_block_reads,__ATOMIC_RELAXED);
+    verified = __atomic_load_n(&native_ufs_verified_blocks,__ATOMIC_RELAXED);
+    failures = __atomic_load_n(&native_ufs_block_failures,__ATOMIC_RELAXED);
+  }
+#else
+  unsigned long long reads = __atomic_load_n(&native_ufs_block_reads,__ATOMIC_RELAXED);
+  unsigned long long verified = __atomic_load_n(&native_ufs_verified_blocks,__ATOMIC_RELAXED);
+  unsigned long long failures = __atomic_load_n(&native_ufs_block_failures,__ATOMIC_RELAXED);
+#endif
+  unsigned reason=bp_poll(&state,now,reads,verified,failures);
   if (state.frozen) { render_snapshot=state;draw(now); }
   boot_progress_reason=reason;
   if(state.frozen) {

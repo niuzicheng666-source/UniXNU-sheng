@@ -47,6 +47,10 @@ while i < len(args):
 command += ['-DXNU_BOOT_PROGRESS=1', '-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror',
             '-I', str(ROOT / '.cache/xnu-work/osfmk'),
             '-I', str(font_dir)]
+# BootProgress.c reads the native_virtio_* counters only when the profile links that driver. The build script sets the
+# macro for KernelConfigTables.cpo alone, so pass it here too, or the 17 image would lose its Virtio branch.
+if os.environ.get('XNU_NATIVE_VIRTIO_BLOCK') == '1':
+    command.append('-DXNU_NATIVE_VIRTIO_BLOCK=1')
 subprocess.run(command, cwd=record['directory'], check=True, timeout=90)
 (OUT / 'compile-command.json').write_text(json.dumps(command,indent=2)+'\n')
 fault_source = ROOT / 'kits/sheng/BootFaultProbe.c'
