@@ -20,3 +20,7 @@ CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
 CONFIG_XNU_OWNER_DATA_VOLUME_UUID="2A5E9027-D9E1-40F9-983C-41BD3F1994F5"
 CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
 CONFIG_XNU_NATIVE_ADRENO=y
+# The on-screen boot page (package/BootProgress.c, boot-progress=2). build-xnu-4k-baseline.sh builds
+# libBootProgress.a and force-loads it itself when this is set; the source-storage archive already owns
+# BootWatchdogPolicy/BootDiagExport/BootLatencyTrace, so the builder leaves those out of its own archive.
+CONFIG_XNU_BOOT_PROGRESS=y

@@ -58,32 +58,38 @@ while j < len(policy_args):
         policy_command.append(arg)
     j += 1
 policy_command += ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror']
-subprocess.run(policy_command, cwd=policy_record['directory'], check=True, timeout=90)
-# The diagnostic file export (BootLog.c's sheng-diag-export) reads files through the VFS: the same BSD-side flags.
-diag_source = ROOT / 'kits/sheng/BootDiagExport.c'
-diag_obj = OUT / 'BootDiagExport.o'
-diag_command = [str(diag_source) if arg == str(policy_source) else str(diag_obj) if arg == str(policy_obj) else arg for arg in policy_command]
-subprocess.run(diag_command, cwd=policy_record['directory'], check=True, timeout=90)
-latency_source = ROOT / 'kits/sheng/BootLatencyTrace.c'
-latency_obj = OUT / 'BootLatencyTrace.o'
-latency_command = [str(latency_source) if arg == str(source) else str(latency_obj) if arg == str(obj) else arg for arg in command]
-subprocess.run(latency_command, cwd=record['directory'], check=True, timeout=90)
-# The firmware file reader of the audio DSP bring-up (AdspProbe.cpp) uses the VFS too.
-fw_source = ROOT / 'kits/sheng/AdspFirmware.c'
-fw_obj = OUT / 'AdspFirmware.o'
-fw_command = [str(fw_source) if arg == str(policy_source) else str(fw_obj) if arg == str(policy_obj) else arg for arg in policy_command]
-subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=90)
+# On the source-storage profiles (iPadOS 26/27) four of the sources below already belong to another archive that is
+# force-loaded beside this one, so a second copy is a duplicate symbol: BootWatchdogPolicy.c, BootDiagExport.c and
+# BootLatencyTrace.c are members of libShengSourceStorage.a (build-sheng-source-storage.py), and AdspFirmware.c is built
+# by build-gop-legacy-display-27.py into libNativeLegacyDisplay.late.a. The iOS 17 profile has neither archive, so it
+# needs all of them from here. Build only what this profile does not get elsewhere.
+shared = (os.environ.get('XNU_SOURCE_STORAGE') == '1')
+optional = []
+if not shared:
+    subprocess.run(policy_command, cwd=policy_record['directory'], check=True, timeout=90)
+    optional.append(policy_obj)
+    # The diagnostic file export (BootLog.c's sheng-diag-export) reads files through the VFS: the same BSD-side flags.
+    diag_source = ROOT / 'kits/sheng/BootDiagExport.c'
+    diag_obj = OUT / 'BootDiagExport.o'
+    diag_command = [str(diag_source) if arg == str(policy_source) else str(diag_obj) if arg == str(policy_obj) else arg for arg in policy_command]
+    subprocess.run(diag_command, cwd=policy_record['directory'], check=True, timeout=90)
+    optional.append(diag_obj)
+    latency_source = ROOT / 'kits/sheng/BootLatencyTrace.c'
+    latency_obj = OUT / 'BootLatencyTrace.o'
+    latency_command = [str(latency_source) if arg == str(source) else str(latency_obj) if arg == str(obj) else arg for arg in command]
+    subprocess.run(latency_command, cwd=record['directory'], check=True, timeout=90)
+    optional.append(latency_obj)
+    # The firmware file reader of the audio DSP bring-up (AdspProbe.cpp) uses the VFS too.
+    fw_source = ROOT / 'kits/sheng/AdspFirmware.c'
+    fw_obj = OUT / 'AdspFirmware.o'
+    fw_command = [str(fw_source) if arg == str(policy_source) else str(fw_obj) if arg == str(policy_obj) else arg for arg in policy_command]
+    subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=90)
+    optional.append(fw_obj)
 
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
-subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), str(policy_obj), str(diag_obj), str(latency_obj), str(fw_obj)], check=True, timeout=30)
+subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), *map(str, optional)], check=True, timeout=30)
 (OUT / 'build-report.json').write_text(json.dumps({
-    'watchdog_policy_sha256': hashlib.sha256(policy_source.read_bytes()).hexdigest(),
-    'latency_sha256': hashlib.sha256(latency_source.read_bytes()).hexdigest(),
-    'latency_unwind_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyUnwind.h').read_bytes()).hexdigest(),
-    'latency_files_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyFiles.h').read_bytes()).hexdigest(),
-    'latency_store_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyStore.h').read_bytes()).hexdigest(),
-    'diag_sha256': hashlib.sha256(diag_source.read_bytes()).hexdigest(),
     'fault_sha256': hashlib.sha256(fault_source.read_bytes()).hexdigest(),
     'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
     'lifecycle_sha256': hashlib.sha256((source.parent / 'BootProgressLifecycle.h').read_bytes()).hexdigest(),
@@ -92,5 +98,12 @@ subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), st
     'pulse_sha256': hashlib.sha256((source.parent / 'BootProgressPulse.h').read_bytes()).hexdigest(),
     'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
     'hardware_execution': False,
+    # Absent when the profile takes these objects from another force-loaded archive (see `shared` above).
+    **({'watchdog_policy_sha256': hashlib.sha256(policy_source.read_bytes()).hexdigest(),
+        'latency_sha256': hashlib.sha256(latency_source.read_bytes()).hexdigest(),
+        'latency_unwind_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyUnwind.h').read_bytes()).hexdigest(),
+        'latency_files_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyFiles.h').read_bytes()).hexdigest(),
+        'latency_store_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyStore.h').read_bytes()).hexdigest(),
+        'diag_sha256': hashlib.sha256(diag_source.read_bytes()).hexdigest()} if not shared else {}),
 }, indent=2) + '\n')
 print('PASS: strict source-kernel ARM64 boot diagnostic build')

@@ -356,13 +356,16 @@ extern "C" uint64_t native_legacy_surface_allocation(OSObject *surface) {
     IOMemoryDescriptor *memory=native_legacy_surface_descriptor(surface);return memory?memory->getLength():0;
 }
 // The board diagnostic page is not drawn on iPadOS 27: the keystore service's extension rows go nowhere.
-extern "C" {char boot_progress_ext[8][48];}
+// With CONFIG_XNU_BOOT_PROGRESS=y the real definitions come from package/BootProgress.c, linked in through
+// libBootProgress.a; this archive is force-loaded beside it, so the five stubs below would be duplicate symbols.
+// They stay only for the profiles that do not build the page.
+''' + ('' if os.environ.get('XNU_BOOT_PROGRESS') == '1' else '''extern "C" {char boot_progress_ext[8][48];}
 // No boot progress animation runs on iPadOS 27: the scanout is always free and no pulse anchors to the framebuffer.
 extern "C" int boot_progress_prepare_scanout(void) {return 1;}
 extern "C" void boot_progress_cancel_scanout(void) {}
 extern "C" void boot_progress_stage(const char *) {}
 extern "C" int boot_progress_pulse_anchor(uintptr_t,uint64_t,unsigned,unsigned,unsigned) {return 0;}
-''')
+'''))
 compile_cpp(support, OUT / 'LegacyDisplaySupport27.o')
 # The keystore state service (AppleKeyStoreState) and its probe, unchanged from iPadOS 17.
 keystore_source = ROOT / 'kits/sheng/KeyStoreProbe.cpp'

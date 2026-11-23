@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: niuzicheng666-source/UniXNU
-          ref: 0ed7c6801c4c5a6682a44b2863a642a7a56c6b13 # dfb3978 + darwinboot-memory-excluded in devicetree.py
+          ref: 7fb4c54a352b79ead4dd683d1153869a67dde9fb # 0ed7c68 + BOOT_PROGRESS accepts XNU_SOURCE_STORAGE
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
