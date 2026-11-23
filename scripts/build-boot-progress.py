@@ -9,6 +9,20 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/boot-progress'
 OUT.mkdir(parents=True, exist_ok=True)
+# BootProgressDisplay.h includes Font.h from the firmware checkout's FrameBufferSerialPortLib, the same header
+# xnu-panic-screen.c uses. This script runs as a kernel archive step, not as a firmware preflight script, so the
+# unixnu firmware step's UNIXNU_UEFI export is not in the environment: resolve the directory here. Neither the
+# release nor CI checks the firmware out beside the build tree (CI passes --uefi ../uefi-sheng from the device
+# root, and the tree sits under out/<board>/<profile>/tree), so search the ancestors for the header instead of
+# assuming a fixed depth.
+FONT_HEADER = Path('Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib')
+font_dir = Path(os.environ['UNIXNU_UEFI']) / FONT_HEADER if os.environ.get('UNIXNU_UEFI') else None
+if font_dir is None or not (font_dir / 'Font.h').is_file():
+    candidates = [parent / 'uefi-sheng' / FONT_HEADER for parent in ROOT.parents]
+    found = next((c for c in candidates if (c / 'Font.h').is_file()), None)
+    if found is None:
+        raise SystemExit(f'Font.h not found: set UNIXNU_UEFI to the firmware checkout; searched {[str(c) for c in candidates]}')
+    font_dir = found
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json').read_text().strip().rstrip(','))
 source = ROOT / 'kits/sheng/BootProgress.c'
 obj = OUT / 'BootProgress.o'
@@ -32,7 +46,7 @@ while i < len(args):
     i += 1
 command += ['-DXNU_BOOT_PROGRESS=1', '-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror',
             '-I', str(ROOT / '.cache/xnu-work/osfmk'),
-            '-I', str(Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng') / 'Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib')]
+            '-I', str(font_dir)]
 subprocess.run(command, cwd=record['directory'], check=True, timeout=90)
 (OUT / 'compile-command.json').write_text(json.dumps(command,indent=2)+'\n')
 fault_source = ROOT / 'kits/sheng/BootFaultProbe.c'
