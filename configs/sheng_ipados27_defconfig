@@ -23,4 +23,9 @@ CONFIG_XNU_NATIVE_ADRENO=y
 # The on-screen boot page (package/BootProgress.c, boot-progress=2). build-xnu-4k-baseline.sh builds
 # libBootProgress.a and force-loads it itself when this is set; the source-storage archive already owns
 # BootWatchdogPolicy/BootDiagExport/BootLatencyTrace, so the builder leaves those out of its own archive.
-CONFIG_XNU_BOOT_PROGRESS=y
+# Off for one baseline run: the 27 prelink stops at "Native __DATA overlaps a retained segment", and with
+# the page linked the run cannot tell whether this archive crowds __DATA or the USB prelink roots already
+# fill it. Without the page the kernel and prelink either complete (the archive was the excess) or stop at
+# the same overlap (the roots are), and either answer is the one the next change needs. Turn it back on
+# once prelink reports its accounting.
+# CONFIG_XNU_BOOT_PROGRESS=y

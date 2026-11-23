@@ -226,6 +226,11 @@ jobs:
           # rejected it. Editing the submodule's tracked files makes update_submodules()
           # leave the checkout alone ("under local development"), so the change survives.
           python3 scripts/apply-shengufs-root-base.py drivers/ShengUfs
+          # The 27 prelink stops with "Native __DATA overlaps a retained segment", which names
+          # no ranges. Only a runner has the Apple kernelcache this needs, so report the byte
+          # accounting from the failing run itself rather than spending another build to get it.
+          python3 scripts/add-prelink-layout-diagnostic.py ../UniXNU/kits/XnuPrelink/fileset_layout.py \
+            || echo "layout diagnostic not applied"
           args=(--os "$OS_PROFILE" --uefi ../uefi-sheng)
           if [ "$OS_PROFILE" = 27 ] && [ "$INIT_DATA" = true ]; then
             args+=(--init-data)
@@ -234,7 +239,7 @@ jobs:
             echo "=== PACKAGE FAILED: dumping build logs ==="
             find ../UniXNU/out -name '*.log' -type f 2>/dev/null | while read -r f; do
               echo "===== $f ====="
-              grep -E "error:|fatal error:|Undefined symbols|undefined reference|symbol\(s\) not found|ld: |Assertion|No such file|duplicate symbol" "$f" 2>/dev/null | tail -60
+              grep -E "error:|fatal error:|Undefined symbols|undefined reference|symbol\(s\) not found|ld: |Assertion|No such file|duplicate symbol|\[layout\]" "$f" 2>/dev/null | tail -60
               echo "--- last lines ---"
               tail -25 "$f" 2>/dev/null
             done

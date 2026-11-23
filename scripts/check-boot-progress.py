@@ -21,7 +21,7 @@ VIRTIO = ('native_virtio_ready', 'native_virtio_read_requests',
           'native_virtio_read_failures', 'native_virtio_verified_blocks')
 PROFILES = {'sheng_defconfig': (True, True),              # 17: boot page, links the virtio driver
             'sheng_ipados26_defconfig': (False, False),   # 26: no page, no driver
-            'sheng_ipados27_defconfig': (True, False)}    # 27: page, no driver
+            'sheng_ipados27_defconfig': (False, False)}   # 27: page off for the __DATA baseline run
 failures = []
 
 
@@ -80,7 +80,10 @@ check('parses', bool(tomllib.loads(porting)))
 print('\n=== profile macros ===')
 for name, (page, driver) in PROFILES.items():
     text = (ROOT / 'configs' / name).read_text(encoding='utf-8')
-    got = ('CONFIG_XNU_BOOT_PROGRESS=y' in text, 'CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y' in text)
+    # A commented-out setting must read as off, so match only uncommented lines.
+    enabled = {line.strip() for line in text.splitlines()
+               if line.strip() and not line.lstrip().startswith('#')}
+    got = ('CONFIG_XNU_BOOT_PROGRESS=y' in enabled, 'CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y' in enabled)
     check(name, got == (page, driver), f'page={got[0]} driver={got[1]}')
 
 print('\n' + ('ALL PASS' if not failures else f'FAILED: {failures}'))
