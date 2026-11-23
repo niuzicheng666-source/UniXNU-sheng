@@ -134,7 +134,17 @@ jobs:
             sleep 20
           done
           [ "$installed" = 1 ] || { echo "brew install failed after 6 attempts" >&2; exit 1; }
-          brew install glslang --build-from-source
+          # The runner's Homebrew API cache can already hold a partial glslang.rb ("File exists" from
+          # syserr_fail2_in), which the retry loop above cannot clear because it never saw that formula.
+          # Clear the cached file and retry rather than failing the whole run on a cache left over
+          # between jobs.
+          for attempt in 1 2 3; do
+            if brew install glslang --build-from-source; then break; fi
+            echo "glslang install failed (attempt $attempt/3); clearing the cached formula" >&2
+            rm -f "$HOME/Library/Caches/Homebrew/api-source/Homebrew/homebrew-core/"*/Formula/g/glslang.rb
+            sleep 20
+          done
+          brew list glslang >/dev/null
           {
             echo "$HOME/.cargo/bin"
             echo "/opt/homebrew/opt/llvm/bin"
