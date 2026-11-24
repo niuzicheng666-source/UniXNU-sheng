@@ -701,20 +701,36 @@ size_t boot_progress_spawn_rows(char *out,size_t cap) {
 // Sampling profile (int-146): every interrupt that lands in a process records that process's interrupted PC, user (EL0) or kernel, in a
 // ring of the last 64K samples; boot_progress_profile_rows ranks them per process for the UFS log. One packed word per sample:
 // pid << 48 | kernel << 47 | pc & (2^47 - 1) (a kernel PC is rebuilt by setting the top 17 bits).
+// Both rings live in allocated memory, not __DATA. As two static arrays they were 1,048,576 bytes of the
+// kernel's __DATA, and that is what pushed the prelinked image past the room before its first retained
+// kext segment: native __DATA was 3,080,192 bytes against 1,998,848 of front hole, an overhang of
+// 1,081,344 that these arrays account for to within 32,768. Moving them out leaves __DATA at 2,031,616,
+// which is still 32,768 over. That remainder is NOT recoverable here: the ring sizes below only decide
+// the size of the IOMalloc, so shrinking BpKernSamples cannot lower __DATA, and the page's statics
+// outside these rings total about 33,048 bytes, barely more than the gap.
+// The interrupt path cannot allocate, so boot_progress_profile_alloc sets the pointers up on the
+// bootstrap thread (see there); an interrupt that arrives before that drops the sample and counts it
+// rather than writing through a null pointer.
 enum {BpProfSamples = 65536};
-static uint64_t bp_prof[BpProfSamples];
+static uint64_t *bp_prof;
 static uint32_t bp_prof_head;
+// Samples the interrupt path could not record because the rings were not allocated yet. Nonzero means
+// the [profile] rows below cover less of the boot than their sample count suggests.
+static uint32_t bp_prof_dropped;
 // Interrupted samples per core and process (pid % 61), since boot: shows which cores the busy processes run on.
 static uint32_t bp_cpu_cnt[8][64];
 // Kernel samples also keep the interrupted frame chain (int-147): int-146's hottest kernel PC was the instruction after DAIFClr in
 // ml_set_interrupts_enabled, i.e. timer interrupts held pending by an interrupts-masked section, which only its callers can name.
-// Per sample: pc and three return addresses, each as its low 32 bits (kernel text lies in one 4 GiB window); 0 = frame not inside the
+// Per sample: pc and three return addresses, each as their low 32 bits (kernel text lies in one 4 GiB window); 0 = frame not inside the
 // interrupted thread's kernel stack.
 enum {BpKernSamples = 32768};
-static uint32_t bp_kern[BpKernSamples][4];
+static uint32_t *bp_kern;
 static uint32_t bp_kern_head;
 static void bp_kernel_chain(uint64_t pc) {
-  uint32_t *e=bp_kern[__atomic_fetch_add(&bp_kern_head,1,__ATOMIC_RELAXED)%BpKernSamples];
+  // bp_kern is set before either ring is published, so one test covers both.
+  uint32_t *const kern=bp_kern;
+  if(!kern)return;
+  uint32_t *e=&kern[(__atomic_fetch_add(&bp_kern_head,1,__ATOMIC_RELAXED)%BpKernSamples)*4];
   e[0]=(uint32_t)pc;e[1]=e[2]=e[3]=0;
   const arm_saved_state_t *s=getCpuDatap()->cpu_int_state;thread_t thread=current_thread();
   if(!s || !thread || !thread->kernel_stack)return;
@@ -732,12 +748,17 @@ void boot_progress_irq(uint64_t pc,uint64_t psr,uint64_t sp) {
     __atomic_store_n(&irq_entry_pc,pc,__ATOMIC_RELAXED);
     if(started && nprocs>0) {
       const int pid=proc_selfpid();
-      if(pid>0) {
+      // Read the pointer once: the bootstrap thread publishes it without a lock, and this path must
+      // not see a half-set pair (bp_prof live, bp_kern still null).
+      uint64_t *const prof=bp_prof;
+      if(prof && pid>0) {
         const uint64_t kernel=(psr&0x1f)!=0;
         const uint32_t at=__atomic_fetch_add(&bp_prof_head,1,__ATOMIC_RELAXED);
-        bp_prof[at%BpProfSamples]=((uint64_t)(pid&0xffff)<<48)|(kernel<<47)|(pc&((1ull<<47)-1));
+        prof[at%BpProfSamples]=((uint64_t)(pid&0xffff)<<48)|(kernel<<47)|(pc&((1ull<<47)-1));
         bp_cpu_cnt[getCpuDatap()->cpu_number&7][pid%61]++;
         if(kernel)bp_kernel_chain(pc);
+      } else if(pid>0) {
+        __atomic_fetch_add(&bp_prof_dropped,1,__ATOMIC_RELAXED);
       }
     }
   }
@@ -1221,8 +1242,21 @@ static void cpu0_park(void *arg, wait_result_t result) {
   thread_block(THREAD_CONTINUE_NULL);
   for (;;) __asm__ volatile("yield");
 }
+// The sampling rings, once, on the bootstrap thread before any sample is taken. boot_progress_init runs
+// from arm_init, before the zone allocator exists, and the interrupt path cannot allocate at all, so this
+// is the one point that is both late enough and early enough. Assignment order matters: bp_prof is
+// published last, and the interrupt path tests it before touching bp_kern.
+static void boot_progress_profile_alloc(void) {
+  if (bp_prof) return;
+  // IOMalloc panics rather than returning null once the zone allocator is up, and this runs only after
+  // it is. Reaching a null check here would mean the allocator was not ready, which is a bug in the call
+  // site, not a condition to paper over.
+  bp_kern=(uint32_t *)IOMalloc((size_t)BpKernSamples*4*sizeof(uint32_t));   // first, guarded by bp_prof
+  __atomic_store_n(&bp_prof,(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t)),__ATOMIC_RELEASE);
+}
 void boot_progress_start(void) {
   if (!enabled || started) return;
+  boot_progress_profile_alloc();
   started=1;thread_t thread;
   if(kernel_thread_start_priority(monitor,0,BASEPRI_PREEMPT,&thread)!=KERN_SUCCESS) {
     boot_progress_stage("monitor thread creation FAILED; IRQ sampling remains"); return;
@@ -1251,11 +1285,10 @@ static void bp_heap_sort(uint64_t *v,size_t n) {
   for(size_t end=n;end>1;){--end;uint64_t t=v[0];v[0]=v[end];v[end]=t;
     for(size_t root=0;;){size_t c=2*root+1;if(c>=end)break;if(c+1<end && v[c+1]>v[c])++c;if(v[root]>=v[c])break;t=v[root];v[root]=v[c];v[c]=t;root=c;}}
 }
-// The sort workspace is only touched by this function, on the log writer's thread, so it lives in
-// allocated memory instead of __DATA: as two 512 KiB arrays it was half of what made this archive
-// overflow the prelinked kernel's __DATA. The sampling ring above stays static because the interrupt
-// path writes it, and allocation is not reachable from there. Allocated on first use rather than in
-// boot_progress_init, which arm_init runs before the zone allocator is up.
+// The sort workspace is only touched by this function, on the log writer's thread, so it is allocated
+// here on first use rather than reserved anywhere. The sampling rings themselves are allocated by
+// boot_progress_profile_alloc on the bootstrap thread, for the same reason: every byte this file keeps
+// in __DATA is a byte the prelink has to fit in front of the first retained kext segment.
 static uint64_t *bp_prof_snap,*bp_prof_rank;
 size_t boot_progress_profile_rows(char *out,size_t cap) {
   const uint32_t head=__atomic_load_n(&bp_prof_head,__ATOMIC_RELAXED);
@@ -1263,17 +1296,21 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
   size_t at=0;
 #define BP_ROW(...) do{int w=snprintf(out+at,cap>at?cap-at:0,__VA_ARGS__);if(w>0)at+=(size_t)w;if(at>=cap)at=cap?cap-1:0;}while(0)
   if(!n || cap<64)return 0;
+  // The bootstrap thread allocates the rings before the first sample, so a null here means the sampler
+  // never started; the dropped counter below then accounts for the whole boot.
+  const uint64_t *const prof=bp_prof,*const kern=bp_kern;
+  if(!prof || !kern)return 0;
   // First use, on this thread only. A null result costs the [profile] rows alone.
   if(!bp_prof_snap)bp_prof_snap=(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t));
   if(!bp_prof_rank)bp_prof_rank=(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t));
   if(!bp_prof_snap || !bp_prof_rank)return 0;
-  memcpy(bp_prof_snap,bp_prof,n*sizeof(uint64_t));
+  memcpy(bp_prof_snap,prof,n*sizeof(uint64_t));
   bp_heap_sort(bp_prof_snap,n);
   // per process: (count << 16 | pid), ranked
   size_t procs=0;
   for(size_t i=0;i<n;){size_t j=i;const uint64_t pid=bp_prof_snap[i]>>48;while(j<n && bp_prof_snap[j]>>48==pid)++j;bp_prof_rank[procs++]=((uint64_t)(j-i)<<16)|pid;i=j;}
   bp_heap_sort(bp_prof_rank,procs);
-  BP_ROW("PS samples=%u kept=%lu |",head,(unsigned long)n);
+  BP_ROW("PS samples=%u kept=%lu dropped=%u |",head,(unsigned long)n,__atomic_load_n(&bp_prof_dropped,__ATOMIC_RELAXED));
   for(size_t k=0;k<8 && k<procs;k++)BP_ROW(" p%llu:%llu",bp_prof_rank[procs-1-k]&0xffff,bp_prof_rank[procs-1-k]>>16);
   BP_ROW("\n");
   for(size_t k=0;k<3 && k<procs;k++) {
@@ -1312,7 +1349,7 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
   {
     const uint32_t khead=__atomic_load_n(&bp_kern_head,__ATOMIC_RELAXED);
     const size_t kn=khead<BpKernSamples?khead:BpKernSamples;
-    for(size_t i=0;i<kn;i++)bp_prof_snap[i]=((uint64_t)bp_kern[i][0]<<32)|i;
+    for(size_t i=0;i<kn;i++)bp_prof_snap[i]=((uint64_t)kern[i*4]<<32)|i;
     bp_heap_sort(bp_prof_snap,kn);
     size_t m=0;
     for(size_t i=0;i<kn;){size_t j=i;while(j<kn && bp_prof_snap[j]>>32==bp_prof_snap[i]>>32)++j;bp_prof_rank[m++]=((uint64_t)(j-i)<<32)|(uint64_t)i;i=j;}
@@ -1322,7 +1359,7 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
       BP_ROW("PK %x:%lu",(unsigned)(bp_prof_snap[first]>>32),(unsigned long)count);
       // chains of this PC into the free tail of bp_prof_rank (above the m ranked PCs): (r1 << 32 | r2), sorted, grouped
       uint64_t *chain=bp_prof_rank+m;size_t c=0;
-      for(size_t i=first;i<first+count && m+c<BpProfSamples;i++){const uint32_t *x=bp_kern[bp_prof_snap[i]&0xffffffff];chain[c++]=((uint64_t)x[1]<<32)|x[2];}
+      for(size_t i=first;i<first+count && m+c<BpProfSamples;i++){const uint32_t *x=&kern[(bp_prof_snap[i]&0xffffffff)*4];chain[c++]=((uint64_t)x[1]<<32)|x[2];}
       bp_heap_sort(chain,c);
       // groups as (count << 40 | first index); the 64 largest are kept
       uint64_t groups[64];size_t g=0;
@@ -1332,7 +1369,7 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
         i=j;}
       bp_heap_sort(groups,g);
       for(size_t q=0;q<6 && q<g;q++){const uint64_t ge=groups[g-1-q];const uint64_t pair=chain[ge&0xffffffffff];
-        uint32_t r3=0;for(size_t i=first;i<first+count;i++){const uint32_t *x=bp_kern[bp_prof_snap[i]&0xffffffff];if(x[1]==(uint32_t)(pair>>32) && x[2]==(uint32_t)pair){r3=x[3];break;}}
+        uint32_t r3=0;for(size_t i=first;i<first+count;i++){const uint32_t *x=&kern[(bp_prof_snap[i]&0xffffffff)*4];if(x[1]==(uint32_t)(pair>>32) && x[2]==(uint32_t)pair){r3=x[3];break;}}
         BP_ROW(" %x/%x/%x:%llu",(unsigned)(pair>>32),(unsigned)pair,r3,ge>>40);}
       BP_ROW("\n");
     }
