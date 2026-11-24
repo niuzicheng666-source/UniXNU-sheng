@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: niuzicheng666-source/UniXNU
-          ref: 7fb4c54a352b79ead4dd683d1153869a67dde9fb # 0ed7c68 + BOOT_PROGRESS accepts XNU_SOURCE_STORAGE
+          ref: b323a5c9031de838a5020ee60a9f27ae49bc9d8f # 7fb4c54 + boot-progress probe (drop once the layer builds)
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
@@ -242,6 +242,19 @@ jobs:
               grep -E "error:|fatal error:|Undefined symbols|undefined reference|symbol\(s\) not found|ld: |Assertion|No such file|duplicate symbol|\[layout\]" "$f" 2>/dev/null | tail -60
               echo "--- last lines ---"
               tail -25 "$f" 2>/dev/null
+            done
+            # The loop above shows only the last lines of each log, which cut the boot-progress
+            # accounting out of kernel.log. These two are printed whole, and the probe file is a
+            # fixed path so its contents survive regardless of which log carried them.
+            echo "=== boot progress probe ==="
+            find ../UniXNU/out -name 'boot-progress-probe.txt' -type f 2>/dev/null | while read -r f; do
+              echo "===== $f ====="; cat "$f"
+            done
+            for f in $(find ../UniXNU/out -name 'kernel.log' -type f 2>/dev/null); do
+              echo "===== $f: boot progress lines ====="
+              grep -nE "boot-progress|libBootProgress|BOOT_PROGRESS|segments |build-boot-progress" "$f" || echo "(no boot progress lines)"
+              echo "===== $f: entire log (capped) ====="
+              head -c 400000 "$f"
             done
             exit 1
           fi
