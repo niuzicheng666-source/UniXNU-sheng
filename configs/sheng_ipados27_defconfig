@@ -8,6 +8,12 @@ CONFIG_XNU_KERNEL_CHAINED_FIXUPS=y
 CONFIG_XNU_SOURCE_STORAGE_TABLES="userdata"
 # Owner-verified UFS windows from the source storage archive authorize the mounted root.
 CONFIG_XNU_SOURCE_STORAGE=y
+# The source corecrypto provider: build-xnu-4k-baseline.sh links the namespaced corecrypto archive
+# and defines XNU_SOURCE_CORECRYPTO14, which is what source-corecrypto14-bootstrap.patch compiles
+# against. CONFIG_XNU_CRYPTO_BOOTSTRAP="source" alone does not do that: the macro's own guard is
+# this setting, and without it the archive is never linked. The boot page requires it (the builder
+# refuses BOOT_PROGRESS=1 without it), so the page never compiled on any profile until now.
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_OWNER_ROOT_AUDIT=y
 CONFIG_XNU_OWNER_ROOT_TRUST=y
 # SystemOS cryptex, boot manifest and the writable Data volume from the Data seed's RAM disk.

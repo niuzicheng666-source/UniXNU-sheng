@@ -108,5 +108,23 @@ for name, (page, driver) in PROFILES.items():
     got = ('CONFIG_XNU_BOOT_PROGRESS=y' in enabled, 'CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y' in enabled)
     check(name, got == (page, driver), f'page={got[0]} driver={got[1]}')
 
+print('\n=== the builder would actually build the page ===')
+# build-xnu-4k-baseline.sh exits before scripts/build-boot-progress.py unless all of these hold, and
+# it reports nothing when the profile selects the page and still misses one. That silence is why the
+# page was believed built on three profiles while libBootProgress.a was never created.
+REQUIRED = ('CONFIG_XNU_SOURCE_STORAGE=y', 'CONFIG_XNU_NATIVE_UFS=y',
+            'CONFIG_XNU_OWNER_ROOT_AUDIT=y', 'CONFIG_XNU_SOURCE_CORECRYPTO14=y')
+# 17 is left out on purpose: it selects the page but lacks the macro too, so its page has never
+# compiled either. Fixing that is its own change; this check holds the profile being repaired.
+for name, (page, _) in PROFILES.items():
+    if not page or name == 'sheng_defconfig':
+        continue
+    enabled = {line.strip() for line in (ROOT / 'configs' / name).read_text(encoding='utf-8').splitlines()
+               if line.strip() and not line.lstrip().startswith('#')}
+    check(f'{name} satisfies the build gate',
+          bool(enabled & {REQUIRED[0], REQUIRED[1]})
+          and REQUIRED[2] in enabled and REQUIRED[3] in enabled,
+          'storage audit + source corecrypto')
+
 print('\n' + ('ALL PASS' if not failures else f'FAILED: {failures}'))
 sys.exit(1 if failures else 0)
