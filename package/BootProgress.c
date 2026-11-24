@@ -22,6 +22,7 @@ extern int proc_selfpid(void);
 #include <kern/processor.h>
 #include <arm/thread.h>
 #include <console/video_console.h>
+#include <IOKit/IOLib.h>
 #include "BootProgressCore.h"
 #include "BootProgressDisplay.h"
 #include "BootProgressPulse.h"
@@ -1250,13 +1251,22 @@ static void bp_heap_sort(uint64_t *v,size_t n) {
   for(size_t end=n;end>1;){--end;uint64_t t=v[0];v[0]=v[end];v[end]=t;
     for(size_t root=0;;){size_t c=2*root+1;if(c>=end)break;if(c+1<end && v[c+1]>v[c])++c;if(v[root]>=v[c])break;t=v[root];v[root]=v[c];v[c]=t;root=c;}}
 }
-static uint64_t bp_prof_snap[BpProfSamples],bp_prof_rank[BpProfSamples];
+// The sort workspace is only touched by this function, on the log writer's thread, so it lives in
+// allocated memory instead of __DATA: as two 512 KiB arrays it was half of what made this archive
+// overflow the prelinked kernel's __DATA. The sampling ring above stays static because the interrupt
+// path writes it, and allocation is not reachable from there. Allocated on first use rather than in
+// boot_progress_init, which arm_init runs before the zone allocator is up.
+static uint64_t *bp_prof_snap,*bp_prof_rank;
 size_t boot_progress_profile_rows(char *out,size_t cap) {
   const uint32_t head=__atomic_load_n(&bp_prof_head,__ATOMIC_RELAXED);
   const size_t n=head<BpProfSamples?head:BpProfSamples;
   size_t at=0;
 #define BP_ROW(...) do{int w=snprintf(out+at,cap>at?cap-at:0,__VA_ARGS__);if(w>0)at+=(size_t)w;if(at>=cap)at=cap?cap-1:0;}while(0)
   if(!n || cap<64)return 0;
+  // First use, on this thread only. A null result costs the [profile] rows alone.
+  if(!bp_prof_snap)bp_prof_snap=(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t));
+  if(!bp_prof_rank)bp_prof_rank=(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t));
+  if(!bp_prof_snap || !bp_prof_rank)return 0;
   memcpy(bp_prof_snap,bp_prof,n*sizeof(uint64_t));
   bp_heap_sort(bp_prof_snap,n);
   // per process: (count << 16 | pid), ranked

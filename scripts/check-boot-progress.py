@@ -21,7 +21,7 @@ VIRTIO = ('native_virtio_ready', 'native_virtio_read_requests',
           'native_virtio_read_failures', 'native_virtio_verified_blocks')
 PROFILES = {'sheng_defconfig': (True, True),              # 17: boot page, links the virtio driver
             'sheng_ipados26_defconfig': (False, False),   # 26: no page, no driver
-            'sheng_ipados27_defconfig': (False, False)}   # 27: page off for the __DATA baseline run
+            'sheng_ipados27_defconfig': (True, False)}    # 27: page, no driver
 failures = []
 
 
@@ -66,6 +66,27 @@ else:
     # because a constant condition still emits a relocation for every symbol it names.
     check('26/27: no virtio symbol emitted', not symbols_in(plain), f'{symbols_in(plain) or "none"}')
     check('17: all four retained', symbols_in(virtio) == list(VIRTIO), f'{len(symbols_in(virtio))}/4')
+
+print('\n=== __DATA budget ===')
+# This archive links into the prelinked kernel, where the USB roots already leave __DATA full; a 2 MiB
+# static run of profile arrays is what overflowed it. Anything allocation-sized must not be static.
+BUDGET = 1300 * 1024      # measured 2.14 MiB before the fix, 1.09 MiB after
+STATIC_ARRAYS = {          # name: (count expression, element bytes) -- mirrors the source
+    'bp_prof[BpProfSamples]': (65536, 8),
+    'bp_kern[BpKernSamples][4]': (32768, 16),
+    'bp_cpu_cnt[8][64]': (512, 4),
+    'census[BpCensus]': (448, 32),
+}
+source = PROGRESS.read_text(encoding='utf-8')
+total = 0
+for name, (count, size) in STATIC_ARRAYS.items():
+    declared = re.search(r'static\s+[^;]*\b' + re.escape(name.split('[')[0]) + r'\s*\[', source)
+    if declared:
+        total += count * size
+check('profile sort arrays are not static',
+      not re.search(r'static\s+uint64_t\s+bp_prof_snap\s*\[', source))
+check('static __DATA within budget', total <= BUDGET,
+      f'{total/1024:.0f} KiB of {BUDGET/1024:.0f} KiB')
 
 print('\n=== builder forwards the personality macro ===')
 builder = BUILDER.read_text(encoding='utf-8')

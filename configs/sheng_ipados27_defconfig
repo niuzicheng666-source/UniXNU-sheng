@@ -23,8 +23,7 @@ CONFIG_XNU_NATIVE_ADRENO=y
 # The on-screen boot page (package/BootProgress.c, boot-progress=2). build-xnu-4k-baseline.sh builds
 # libBootProgress.a and force-loads it itself when this is set; the source-storage archive already owns
 # BootWatchdogPolicy/BootDiagExport/BootLatencyTrace, so the builder leaves those out of its own archive.
-# Off since the 2026-11-24 baseline: the page's own archive is what pushes __DATA past the retained
-# segments and stops prelink at "Native __DATA overlaps a retained segment"; without it the whole 27 flow
-# completes and produces boot.img. Turning it back on needs this archive's __DATA footprint shrunk first,
-# and scripts/add-prelink-layout-diagnostic.py prints the segment accounting to show by how much.
-# CONFIG_XNU_BOOT_PROGRESS=y
+# The 2026-11-24 baseline run showed the page's own archive is what pushed __DATA past the retained
+# segments into "Native __DATA overlaps a retained segment", while the same flow completed without it.
+# The two 512 KiB profile sort arrays now live in allocated memory instead, which is what made room.
+CONFIG_XNU_BOOT_PROGRESS=y
