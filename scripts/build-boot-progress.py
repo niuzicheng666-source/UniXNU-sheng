@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 
@@ -103,6 +104,16 @@ if not shared:
     fw_command = [str(fw_source) if arg == str(policy_source) else str(fw_obj) if arg == str(policy_obj) else arg for arg in policy_command]
     subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=90)
     optional.append(fw_obj)
+
+# This archive links into the prelinked kernel, whose __DATA roots already carry the USB stacks. Printing
+# the per-segment bytes here is what tells a __DATA overflow how much its own object is responsible for,
+# without another build to measure it.
+for member in (obj, fault_obj, *optional):
+    sizes = subprocess.run(['size', '-m', str(member)], capture_output=True, text=True)
+    data = [line.strip() for line in sizes.stdout.splitlines()
+            if re.match(r'Segment (__DATA|__DATA_CONST|__TEXT|__BSS):', line.strip())]
+    if data:
+        print(f'segments {member.name}: ' + '; '.join(data))
 
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
