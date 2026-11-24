@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: niuzicheng666-source/UniXNU
-          ref: b323a5c9031de838a5020ee60a9f27ae49bc9d8f # 7fb4c54 + boot-progress probe (drop once the layer builds)
+          ref: d706a2b4541d5ab31970d32fbac49b425ecf3904 # 7fb4c54 + boot-progress probe (drop once the layer builds)
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
