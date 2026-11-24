@@ -84,7 +84,8 @@ for name, (count, size) in STATIC_ARRAYS.items():
     if declared:
         total += count * size
 check('profile sort arrays are not static',
-      not re.search(r'static\s+uint64_t\s+bp_prof_snap\s*\[', source))
+      not re.search(r'static\s+uint64_t\s+bp_prof_snap\s*\[', source)
+      and bool(re.search(r'static\s+uint64_t\s+\*bp_prof_snap', source)))
 check('static __DATA within budget', total <= BUDGET,
       f'{total/1024:.0f} KiB of {BUDGET/1024:.0f} KiB')
 
