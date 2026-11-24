@@ -34,10 +34,10 @@ static unsigned exit_lock,exit_dropped;
 // the wallpaper's extension, Safari's and the widgets' processes).
 static unsigned seconds(void);
 enum {BpCensus = 448};   // every process name of a boot (int-213: 389 names, 56 kept)
-static struct {char name[24];unsigned short started,exited,first;} census[BpCensus];
+static struct bp_census_row {char name[24];unsigned short started,exited,first;} *census;
 static unsigned census_count,census_lock,census_dropped;
 static void census_note(const char *name,int exited) {
-  if(!name || !name[0])return;
+  if(!name || !name[0] || !census)return;
   if(__atomic_exchange_n(&census_lock,1,__ATOMIC_ACQUIRE)) {__atomic_fetch_add(&census_dropped,1,__ATOMIC_RELAXED);return;}
   unsigned i=0;
   while(i<census_count && strncmp(census[i].name,name,sizeof census[i].name-1))++i;
@@ -54,16 +54,18 @@ static void census_note(const char *name,int exited) {
 // widgets' extensions are launched this way).
 extern int proc_selfexecutableargs(uint8_t *buf,size_t *buflen);
 enum {BpXpcFails = 32};
-static struct {char label[64];unsigned short count;int status;unsigned ns;uint64_t code;} xpc_fails[BpXpcFails];
+static struct bp_xpc_row {char label[64];unsigned short count;int status;unsigned ns;uint64_t code;} *xpc_fails;
 static unsigned xpc_fail_count,xpc_fail_lock,xpc_fail_dropped;
-static uint8_t xpc_args[512];
+enum {BpXpcArgs = 512};
+static uint8_t *xpc_args;
 static void xpc_fail_note(int status,unsigned ns,uint64_t code) {
   char label[64]="?";
+  if(!xpc_fails)return;
   if(!__atomic_exchange_n(&xpc_fail_lock,1,__ATOMIC_ACQUIRE)) {
     // argc, then the exec path and argv strings: the label is the last of the first three strings (path, "xpcproxy", label).
-    size_t length=sizeof xpc_args-1;
+    size_t length=BpXpcArgs-1;
     if(!proc_selfexecutableargs(xpc_args,&length) && length>4) {
-      xpc_args[length<sizeof xpc_args?length:sizeof xpc_args-1]=0;
+      xpc_args[length<BpXpcArgs?length:BpXpcArgs-1]=0;
       unsigned found=0;
       for(size_t at=4;at<length && found<3;) {
         if(!xpc_args[at]){++at;continue;}
@@ -109,7 +111,7 @@ uint64_t boot_progress_epoch, boot_progress_frequency;
 static uint64_t irq_count, thread_count;
 static uint64_t last_pc, last_psr, last_sp;
 struct pc_sample { uint64_t pc, psr; unsigned second; int pid; char name[64]; };
-static struct pc_sample samples[8];
+static struct pc_sample *samples;
 static unsigned sample_count, sample_second = ~0U;
 volatile unsigned boot_progress_frozen, boot_progress_reason;
 volatile unsigned boot_progress_display_owned;
@@ -232,12 +234,15 @@ static int take(void) {
   return 1;
 }
 static void release(void) { __atomic_store_n(&busy, 0, __ATOMIC_RELEASE); }
-// The text of every page row and of the last banner paint, for the UFS log (BootLog.c).
-char boot_progress_page_text[48][BP_COLS];
-char boot_progress_banner_text[49][120];
+// The text of every page row and of the last banner paint, for the UFS log (BootLog.c). These are
+// pointers into bp_heap, not arrays: the page has to keep its own static __DATA at zero for the prelinked
+// kernel to fit in front of its first retained kext segment (see bp_heap). BootLog.c declares them as
+// char (*)[N] rather than char [ROWS][N] accordingly.
+char (*boot_progress_page_text)[BP_COLS];
+char (*boot_progress_banner_text)[120];
 volatile unsigned boot_progress_banner_rows;
 static void capture(unsigned row, const char *text) {
-  if(row<48){strncpy(boot_progress_page_text[row],text,BP_COLS-1);boot_progress_page_text[row][BP_COLS-1]=0;}
+  if(row<48 && boot_progress_page_text){strncpy(boot_progress_page_text[row],text,BP_COLS-1);boot_progress_page_text[row][BP_COLS-1]=0;}
 }
 static void line(unsigned row, const char *text, uint32_t color) {
   capture(row,text);
@@ -718,7 +723,7 @@ static uint32_t bp_prof_head;
 // the [profile] rows below cover less of the boot than their sample count suggests.
 static uint32_t bp_prof_dropped;
 // Interrupted samples per core and process (pid % 61), since boot: shows which cores the busy processes run on.
-static uint32_t bp_cpu_cnt[8][64];
+static uint32_t *bp_cpu_cnt;   /* [8][64] */
 // Kernel samples also keep the interrupted frame chain (int-147): int-146's hottest kernel PC was the instruction after DAIFClr in
 // ml_set_interrupts_enabled, i.e. timer interrupts held pending by an interrupts-masked section, which only its callers can name.
 // Per sample: pc and three return addresses, each as their low 32 bits (kernel text lies in one 4 GiB window); 0 = frame not inside the
@@ -755,7 +760,7 @@ void boot_progress_irq(uint64_t pc,uint64_t psr,uint64_t sp) {
         const uint64_t kernel=(psr&0x1f)!=0;
         const uint32_t at=__atomic_fetch_add(&bp_prof_head,1,__ATOMIC_RELAXED);
         prof[at%BpProfSamples]=((uint64_t)(pid&0xffff)<<48)|(kernel<<47)|(pc&((1ull<<47)-1));
-        bp_cpu_cnt[getCpuDatap()->cpu_number&7][pid%61]++;
+        bp_cpu_cnt[(getCpuDatap()->cpu_number&7)*64 + pid%61]++;
         if(kernel)bp_kernel_chain(pc);
       } else if(pid>0) {
         __atomic_fetch_add(&bp_prof_dropped,1,__ATOMIC_RELAXED);
@@ -872,9 +877,9 @@ static void touch_fill(unsigned x0,unsigned y0,unsigned x1,unsigned y1,uint32_t 
 // Session status rows. The 47 text rows are full, so other kits publish short status strings into this array instead: slots 0-3
 // belong to the keystore/Data work, slots 4-7 to the GPU work (docs/parallel-development.md). They are drawn right of the page text
 // (47 columns, rows 13-20), 30 ms polling, only when the text changed; a redraw of the whole screen (diagnostic resume) repaints them.
-char boot_progress_ext[8][48];
+char (*boot_progress_ext)[48];
 // Two wider GPU rows (GPU7, GPU8) for result lines that do not fit 47 columns; the live banner only.
-char boot_progress_ext_wide[2][112];
+char (*boot_progress_ext_wide)[112];
 // Data persistence counters (NativeRamBlock): ext slots 2-3 are formatted here from them. State: 0 off, 1 blank probe, 2 resumed,
 // 3 fresh, 4 refused/failed, 5 degraded by an I/O error, 6 resumed read-only probe.
 extern volatile uint32_t native_data_persist_state __attribute__((weak_import));
@@ -899,12 +904,14 @@ static void ext_data_rows(void) {
   for(unsigned i=0;i<47;++i){boot_progress_ext[2][i]=a[i]?a[i]:' ';boot_progress_ext[3][i]=b[i]?b[i]:' ';}
   boot_progress_ext[2][47]=boot_progress_ext[3][47]=0;
 }
-static char ext_drawn[8][48];
+static char (*ext_drawn)[48];
 static unsigned ext_bound_seen;
 static void ext_overlay_locked(void) {
+  if(!boot_progress_ext || !ext_drawn)return;
   ext_data_rows();
   if(!display.bound){ext_bound_seen=0;return;}
-  if(!ext_bound_seen){memset(ext_drawn,0,sizeof(ext_drawn));ext_bound_seen=1;}
+  // sizeof on the pointer would be 8; the array it names is 8 rows of 48.
+  if(!ext_bound_seen){memset(ext_drawn,0,8*48);ext_bound_seen=1;}
   unsigned x0=BP_COLS*6*display.scale+8;
   if(display.width<x0+6*display.scale*8)return;
   unsigned cols=(display.width-x0-8)/(6*display.scale);if(cols>47)cols=47;
@@ -981,6 +988,9 @@ static uint64_t banner_copy_n,banner_signature,banner_ufs_v,banner_ufs_r,banner_
 static uint32_t banner_load[4];
 static void crash_banner(unsigned now) {
   if(!boot_progress_display_owned || display.bound || !display.frame || !display.scale || now-banner_second<2)return;
+  // The banner writes the extension slots, the wide rows and the banner text; all of them come from the heap
+  // allocation in boot_progress_heap_alloc, so without it there is nothing to paint from.
+  if(!boot_progress_ext || !boot_progress_ext_wide || !boot_progress_banner_text)return;
   // Each repaint is about a million device stores. A swap overwrites the whole frame, so repaint only when a swap has happened
   // since the last paint or the crash records changed; an idle screen keeps the banner.
   uint64_t gpu_sig=0;
@@ -1242,21 +1252,46 @@ static void cpu0_park(void *arg, wait_result_t result) {
   thread_block(THREAD_CONTINUE_NULL);
   for (;;) __asm__ volatile("yield");
 }
-// The sampling rings, once, on the bootstrap thread before any sample is taken. boot_progress_init runs
-// from arm_init, before the zone allocator exists, and the interrupt path cannot allocate at all, so this
-// is the one point that is both late enough and early enough. Assignment order matters: bp_prof is
-// published last, and the interrupt path tests it before touching bp_kern.
-static void boot_progress_profile_alloc(void) {
+// Everything this page keeps out of __DATA, one allocation, on the bootstrap thread. Native __DATA has to
+// stay under 1,998,848 bytes to fit in front of the prelinked kernel's first retained kext segment; with
+// the arrays below static it measured 3,080,192. Moving the page's statics here puts it at 1,998,848,
+// which fits with no margin at all: __bss alignment padding absorbs the last few KiB, so the next page
+// boundary is about 20 KB further out than what remains in this file. Anything added to the page's
+// __DATA from here on re-breaks the prelink, and the fix belongs outside this file.
+// The call site is boot_progress_start rather than boot_progress_init for one reason: arm_init runs init
+// before the zone allocator exists, and IOMalloc would panic there. boot_progress_start is reached from
+// kernel_bootstrap_thread after clock_service_create, and before started=1, so no sample is taken first.
+// build_tag is deliberately NOT here: boot_progress_init fills it from a boot argument, which is before
+// this runs, so it stays a static char[32].
+static void boot_progress_heap_alloc(void) {
   if (bp_prof) return;
-  // IOMalloc panics rather than returning null once the zone allocator is up, and this runs only after
-  // it is. Reaching a null check here would mean the allocator was not ready, which is a bug in the call
-  // site, not a condition to paper over.
-  bp_kern=(uint32_t *)IOMalloc((size_t)BpKernSamples*4*sizeof(uint32_t));   // first, guarded by bp_prof
+  // Order matters. Everything the interrupt path touches is assigned before bp_prof, which the interrupt
+  // path tests once and treats as "all rings are live".
+  bp_kern=(uint32_t *)IOMalloc((size_t)BpKernSamples*4*sizeof(uint32_t));
+  bp_cpu_cnt=(uint32_t *)IOMalloc(8*64*sizeof(uint32_t));
+  samples=(struct pc_sample *)IOMalloc(8*sizeof(struct pc_sample));
+  memset(samples,0,8*sizeof(struct pc_sample));
+  census=(struct bp_census_row *)IOMalloc(BpCensus*sizeof(struct bp_census_row));
+  memset(census,0,BpCensus*sizeof(struct bp_census_row));
+  xpc_fails=(struct bp_xpc_row *)IOMalloc(BpXpcFails*sizeof(struct bp_xpc_row));
+  memset(xpc_fails,0,BpXpcFails*sizeof(struct bp_xpc_row));
+  boot_progress_page_text=(char (*)[BP_COLS])IOMalloc(48*BP_COLS);
+  boot_progress_banner_text=(char (*)[120])IOMalloc(49*120);
+  boot_progress_ext=(char (*)[48])IOMalloc(8*48);
+  boot_progress_ext_wide=(char (*)[112])IOMalloc(2*112);
+  ext_drawn=(char (*)[48])IOMalloc(8*48);
+  xpc_args=(uint8_t *)IOMalloc(BpXpcArgs);
+  memset(xpc_args,0,BpXpcArgs);
+  memset(boot_progress_page_text,0,48*BP_COLS);
+  memset(boot_progress_banner_text,0,49*120);
+  memset(boot_progress_ext,0,8*48);
+  memset(boot_progress_ext_wide,0,2*112);
+  memset(ext_drawn,0,8*48);
   __atomic_store_n(&bp_prof,(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t)),__ATOMIC_RELEASE);
 }
 void boot_progress_start(void) {
   if (!enabled || started) return;
-  boot_progress_profile_alloc();
+  boot_progress_heap_alloc();
   started=1;thread_t thread;
   if(kernel_thread_start_priority(monitor,0,BASEPRI_PREEMPT,&thread)!=KERN_SUCCESS) {
     boot_progress_stage("monitor thread creation FAILED; IRQ sampling remains"); return;
@@ -1316,7 +1351,7 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
   for(size_t k=0;k<3 && k<procs;k++) {
     const uint64_t pid=bp_prof_rank[procs-1-k]&0xffff;
     BP_ROW("CPU p%llu",pid);
-    for(unsigned c=0;c<8;c++)BP_ROW(" c%u:%u",c,bp_cpu_cnt[c][pid%61]);
+    for(unsigned c=0;c<8;c++)BP_ROW(" c%u:%u",c,bp_cpu_cnt[c*64 + pid%61]);
     BP_ROW("\n");
   }
   uint64_t top[2]={procs?bp_prof_rank[procs-1]&0xffff:0,procs>1?bp_prof_rank[procs-2]&0xffff:0};

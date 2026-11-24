@@ -52,11 +52,11 @@ extern int native_ufs_log_panic(void) __attribute__((weak_import));
 extern unsigned native_ufs_store_gpt_check(void) __attribute__((weak_import));
 extern uint32_t cs_text_fixup_parsed __attribute__((weak_import));
 extern uint32_t cs_text_fixup_applied __attribute__((weak_import));
-extern char boot_progress_page_text[48][120] __attribute__((weak_import));
-extern char boot_progress_banner_text[49][120] __attribute__((weak_import));
+extern char (*boot_progress_page_text)[120] __attribute__((weak_import));
+extern char (*boot_progress_banner_text)[120] __attribute__((weak_import));
 extern volatile unsigned boot_progress_banner_rows __attribute__((weak_import));
-extern char boot_progress_ext[8][48] __attribute__((weak_import));
-extern char boot_progress_ext_wide[2][112] __attribute__((weak_import));
+extern char (*boot_progress_ext)[48] __attribute__((weak_import));
+extern char (*boot_progress_ext_wide)[112] __attribute__((weak_import));
 extern char boot_progress_panic_text[2048] __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_state __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_header __attribute__((weak_import));
@@ -440,16 +440,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   char head[96];
   snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, &boot_progress_tag ? boot_progress_tag() : "");
   at = put(out, at, cap, head, sizeof head);
-  if (&boot_progress_page_text) {
+  if (boot_progress_page_text) {
     at = put(out, at, cap, "[page]", 8);
     for (unsigned i = 0; i < 48; ++i) if (boot_progress_page_text[i][0]) at = put(out, at, cap, boot_progress_page_text[i], 120);
   }
-  if (&boot_progress_banner_text && &boot_progress_banner_rows) {
+  if (boot_progress_banner_text && &boot_progress_banner_rows) {
     unsigned rows = boot_progress_banner_rows; if (rows > 49) rows = 49;
     at = put(out, at, cap, "[banner]", 10);
     for (unsigned i = 0; i < rows; ++i) at = put(out, at, cap, boot_progress_banner_text[i], 120);
   }
-  if (&boot_progress_ext) {
+  if (boot_progress_ext) {
     at = put(out, at, cap, "[ext]", 8);
     for (unsigned i = 0; i < 8; ++i) {char row[56]; snprintf(row, sizeof row, "X%u %.47s", i, boot_progress_ext[i]); at = put(out, at, cap, row, sizeof row);}
   }
@@ -531,7 +531,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_backlight_stats[12], native_backlight_stats[13], native_backlight_stats[14], native_backlight_stats[15]);
     at = put(out, at, cap, row, sizeof row);
   }
-  if (&boot_progress_ext_wide)
+  if (boot_progress_ext_wide)
     for (unsigned i = 0; i < 2; ++i) {char row[120]; snprintf(row, sizeof row, "W%u %.111s", i, boot_progress_ext_wide[i]); at = put(out, at, cap, row, sizeof row);}
   // Every traced process's stacks (the banner shows only what fits the panel): role 0..3 are the boot-ui-focus slots, main thread in full
   // (symbolicate with unslid = address - cache slide), then its thread groups.
