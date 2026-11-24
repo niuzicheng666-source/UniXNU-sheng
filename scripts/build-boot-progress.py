@@ -105,25 +105,42 @@ if not shared:
     subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=90)
     optional.append(fw_obj)
 
-# This archive links into the prelinked kernel, whose __DATA roots already carry the USB stacks. Printing
-# the per-segment bytes here is what tells a __DATA overflow how much its own object is responsible for,
-# without another build to measure it.
-segment_sizes = {}
-for member in (obj, fault_obj, *optional):
-    sizes = subprocess.run(['size', '-m', str(member)], capture_output=True, text=True)
-    data = [line.strip() for line in sizes.stdout.splitlines()
-            if re.match(r'Segment (__DATA|__DATA_CONST|__TEXT|__BSS):', line.strip())]
-    if data:
-        segment_sizes[member.name] = data
-        print(f'segments {member.name}: ' + '; '.join(data))
-# The dump step keeps only the last lines of a log, so these also land beside the report:
-# a __DATA overflow is planned from them, and the run that fails is the only one that has them.
-(OUT / 'segments.txt').write_text(''.join(f'segments {name}: ' + '; '.join(data) + '\n'
-                                          for name, data in segment_sizes.items()))
+# This archive links into the prelinked kernel, whose __DATA roots already carry the USB stacks. The
+# per-segment bytes are what tell a __DATA overflow how much its own objects are responsible for.
+# The first run of this probe came back empty and said nothing about why, which is the failure mode
+# this block exists to prevent -- so every way of getting no number is now reported by name.
+def measure_segments():
+    segment_sizes, why = {}, {}
+    for member in (obj, fault_obj, *optional):
+        if not member.exists():
+            why[member.name] = 'not built for this profile'
+            continue
+        sizes = subprocess.run(['size', '-m', str(member)], capture_output=True, text=True)
+        if sizes.returncode != 0:
+            why[member.name] = f'size -m exited {sizes.returncode}: {sizes.stderr.strip()[:160]}'
+            continue
+        data = [line.strip() for line in sizes.stdout.splitlines()
+                if re.match(r'Segment (__DATA|__DATA_CONST|__TEXT|__BSS):', line.strip())]
+        if data:
+            segment_sizes[member.name] = data
+            print(f'segments {member.name}: ' + '; '.join(data))
+        else:
+            # A layout the regex does not cover is a silent gap unless it is spelled out here.
+            head = ' | '.join(sizes.stdout.splitlines()[:4])
+            why[member.name] = f'no Segment line matched; size -m printed: {head[:160]}'
+    # The dump step keeps only the last lines of a log, so these also land beside the report: a
+    # __DATA overflow is planned from them, and the run that fails is the only one that has them.
+    lines = [f'segments {name}: ' + '; '.join(data) for name, data in segment_sizes.items()]
+    lines += [f'no-segments {name}: {reason}' for name, reason in why.items()]
+    (OUT / 'segments.txt').write_text(''.join(line + '\n' for line in lines))
+    for line in lines:
+        print(line)
+    return segment_sizes
 
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), *map(str, optional)], check=True, timeout=30)
+segment_sizes = measure_segments()
 (OUT / 'build-report.json').write_text(json.dumps({
     'fault_sha256': hashlib.sha256(fault_source.read_bytes()).hexdigest(),
     'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),

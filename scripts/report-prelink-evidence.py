@@ -203,6 +203,56 @@ def show_boot_report():
             print('  segments.txt: absent (build-boot-progress.py did not reach the size step)')
 
 
+def show_largest_symbols():
+    """Name the symbols behind __bss and __common.
+
+    The section table says __DATA is 88% zerofill but not whose zeroes they are, and a plan to
+    shrink it needs names, not a percentage: moving a static array out is only possible once we
+    know which one. nm -S --size-sort is the cheapest answer and the image is already on disk.
+    """
+    report('largest __DATA symbols (zerofill first)')
+    candidates = [p for p in sorted(OUT.glob('**/mach.development.bcm2837*'))
+                  if p.is_file() and not p.name.endswith(('.linkarchives', '.linkarguments'))]
+    preferred = [p for p in candidates if p.name.endswith('.unstripped.noctf')] or candidates
+    if not preferred:
+        print('no kernel image to read symbols from')
+        return
+    path = preferred[0]
+    print(f'--- {path.name}')
+    for tool in ('llvm-nm', 'nm'):
+        try:
+            result = subprocess.run([tool, '-S', '--size-sort', '--numeric-sort', str(path)],
+                                    capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode != 0:
+            print(f'  {tool} failed (exit {result.returncode}): {result.stderr.strip()[:200]}')
+            continue
+        # Rows are: address size type name. Zerofill symbols are 'b'/'B' or 'c'/'C'/'s'/'S'.
+        rows = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            try:
+                size = int(parts[1], 16)
+            except ValueError:
+                continue
+            rows.append((size, parts[2], parts[3]))
+        if not rows:
+            print(f'  {tool} produced no sized symbols')
+            continue
+        zero = [r for r in rows if r[1] in 'bBcCsS']
+        for label, group in (('zerofill (__bss/__common)', zero), ('all symbols', rows)):
+            print(f'  {label}: top 15 of {len(group)}')
+            for size, kind, name in sorted(group, reverse=True)[:15]:
+                print(f'    {size:>12,}  {kind}  {name}')
+            if label.startswith('zerofill'):
+                print(f'  zerofill total: {sum(r[0] for r in zero):,} bytes')
+        return
+    print('  no nm tool available; symbol attribution skipped')
+
+
 def show_layout_diagnostic():
     report('prelink layout accounting ([layout] lines in any log)')
     logs = sorted(OUT.glob('**/logs/prelink.log'))
@@ -229,6 +279,7 @@ def main():
         return 0
     guarded(show_links)
     guarded(show_segments)
+    guarded(show_largest_symbols)
     guarded(show_boot_report)
     guarded(show_layout_diagnostic)
     report('end of prelink evidence')
