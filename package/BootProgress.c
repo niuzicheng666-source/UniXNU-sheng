@@ -1333,7 +1333,9 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
   if(!n || cap<64)return 0;
   // The bootstrap thread allocates the rings before the first sample, so a null here means the sampler
   // never started; the dropped counter below then accounts for the whole boot.
-  const uint64_t *const prof=bp_prof,*const kern=bp_kern;
+  // bp_kern is a flat uint32_t ring, four words per kernel sample (pc, r1, r2, r3), not a uint64_t
+  // one: it was uint32_t[BpKernSamples][4] before the page moved its statics to the heap.
+  const uint64_t *const prof=bp_prof; const uint32_t *const kern=bp_kern;
   if(!prof || !kern)return 0;
   // First use, on this thread only. A null result costs the [profile] rows alone.
   if(!bp_prof_snap)bp_prof_snap=(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t));
