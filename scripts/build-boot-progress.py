@@ -108,12 +108,18 @@ if not shared:
 # This archive links into the prelinked kernel, whose __DATA roots already carry the USB stacks. Printing
 # the per-segment bytes here is what tells a __DATA overflow how much its own object is responsible for,
 # without another build to measure it.
+segment_sizes = {}
 for member in (obj, fault_obj, *optional):
     sizes = subprocess.run(['size', '-m', str(member)], capture_output=True, text=True)
     data = [line.strip() for line in sizes.stdout.splitlines()
             if re.match(r'Segment (__DATA|__DATA_CONST|__TEXT|__BSS):', line.strip())]
     if data:
+        segment_sizes[member.name] = data
         print(f'segments {member.name}: ' + '; '.join(data))
+# The dump step keeps only the last lines of a log, so these also land beside the report:
+# a __DATA overflow is planned from them, and the run that fails is the only one that has them.
+(OUT / 'segments.txt').write_text(''.join(f'segments {name}: ' + '; '.join(data) + '\n'
+                                          for name, data in segment_sizes.items()))
 
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
@@ -126,6 +132,7 @@ subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), *m
     'display_sha256': hashlib.sha256((source.parent / 'BootProgressDisplay.h').read_bytes()).hexdigest(),
     'pulse_sha256': hashlib.sha256((source.parent / 'BootProgressPulse.h').read_bytes()).hexdigest(),
     'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+    'segment_sizes': segment_sizes,
     'hardware_execution': False,
     # Absent when the profile takes these objects from another force-loaded archive (see `shared` above).
     **({'watchdog_policy_sha256': hashlib.sha256(policy_source.read_bytes()).hexdigest(),

@@ -253,11 +253,22 @@ jobs:
             for f in $(find ../UniXNU/out -name 'kernel.log' -type f 2>/dev/null); do
               echo "===== $f: boot progress lines ====="
               grep -nE "boot-progress|libBootProgress|BOOT_PROGRESS|segments |build-boot-progress" "$f" || echo "(no boot progress lines)"
-              echo "===== $f: entire log (capped) ====="
-              head -c 400000 "$f"
+              # The link and archive accounting sit at the end of this log; taking only the head
+              # cut exactly the part a __DATA overflow is diagnosed from.
+              echo "===== $f: first 150 KB ====="
+              head -c 150000 "$f"
+              echo "===== $f: last 250 KB ====="
+              tail -c 250000 "$f"
             done
             exit 1
           fi
+      # Whether or not packaging passed: a plan to shrink the kernel __DATA needs the archive list
+      # XNU actually linked with and the binary's own section sizes, and only this run has them.
+      # Never fail here -- a diagnosis step that fails can drop the artifacts uploaded below.
+      - name: prelink evidence
+        if: always() && inputs.os == '27'
+        working-directory: device
+        run: python3 scripts/report-prelink-evidence.py || echo "prelink evidence step failed"
       - uses: actions/cache/save@v4
         if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/babylon/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
         with:
