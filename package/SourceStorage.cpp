@@ -80,11 +80,27 @@ static void start_data_disk(IOService *provider)
     printf("SourceStorage: Data disk started\n");
 }
 
+// Marks the boot page's bottom row. The page itself never runs on this image, and this file's seven panic
+// checks print nothing at all, so a lit or unlit square is the only evidence of how far this got.
+// A guard rather than weak_import: the kernel links statically, so ld still demands the symbol and a weak
+// reference would fail the 26/17 links, which carry no page archive. The guard is the one macro that
+// separates 27 from 26 in build-sheng-source-storage.py - it is appended only under UNIXNU_IOS_VERSION >= 27,
+// and 27 is the only profile that force-loads libBootProgress.a beside this archive. That script passes
+// XNU_BOOT_PROGRESS to nothing, so a test on it would never be true here.
+#if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
+extern "C" void boot_progress_storage_mark(int);
+#define BP_STORAGE_MARK(arg) boot_progress_storage_mark(arg)
+#else
+#define BP_STORAGE_MARK(arg) ((void)0)
+#endif
+
 extern "C" void native_source_storage_start(void)
 {
+    BP_STORAGE_MARK(0);
     unsigned enabled = 0;
     if (!PE_parse_boot_argn("native-source-storage", &enabled, sizeof(enabled)) || enabled != 1 || attempted)
         return;
+    BP_STORAGE_MARK(1);
     attempted = true;
     OSReturn status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOStorageFamily");
     if (status != kOSReturnSuccess)

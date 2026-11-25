@@ -104,6 +104,44 @@ _Static_assert(offsetof(struct bp_panic_info,depth)==offsetof(struct vc_info,v_d
 _Static_assert(offsetof(struct bp_panic_info,stride)==offsetof(struct vc_info,v_rowbytes),"panic stride ABI");
 _Static_assert(offsetof(struct bp_panic_info,frame)==offsetof(struct vc_info,v_baseaddr),"panic address ABI");
 static unsigned pulse_worker_status,bind_count,bind_result=3,bind_depth;
+// Where the boot reached, for a run that shows nothing else. The console is never bound on that image and
+// no serial line exists, so printf and boot_progress_stage both go nowhere; the framebuffer the touch
+// controller paints into is the only surface left. Each mark is a 4-byte word set here at the moment the
+// step is reached and painted in bp_marks() as soon as display is bound - init and start run long before
+// video_console calls boot_progress_bind, so they cannot paint when they happen. One unsigned, so the
+// page's static __DATA stays where it is.
+// Each bit is one step, and bp_marks() paints them left to right in this order.
+enum {BP_MARK_INIT=1u<<0,        /* boot_progress_init reached */
+      BP_MARK_ARG=1u<<1,         /* and its boot-progress argument was 1 or 2 */
+      BP_MARK_FREQ=1u<<2,        /* and cntfrq_el0 did not read zero */
+      BP_MARK_START=1u<<3,       /* boot_progress_start reached with enabled set */
+      BP_MARK_HEAP=1u<<4,        /* every ring of boot_progress_heap_alloc came back */
+      BP_MARK_BIND=1u<<5,        /* boot_progress_bind accepted a framebuffer (without this, no mark can show) */
+      BP_MARK_STORAGE=1u<<6,     /* native_source_storage_start reached */
+      BP_MARK_STORAGE_ON=1u<<7}; /* and it passed the native-source-storage argument gate */
+static unsigned bp_marks_bits;
+static void bp_mark(unsigned bit) { __atomic_fetch_or(&bp_marks_bits, bit, __ATOMIC_RELAXED); }
+
+// Bottom-left of the panel, clear of the touch controller's own corner marks (top-left, top-right,
+// bottom-left blue, bottom-right) and clear of the three-bar strip the boot page owns at the top.
+// Six squares in one row; each present bit is green, each absent one is dark red. A dead run shows six
+// dark red squares only if BP_MARK_BIND is lit, which says the framebuffer path itself works.
+static void bp_marks(void) {
+  // Written straight into the surface rather than through touch_fill, which tests display.bound: these marks
+  // are painted before the page's own bind accepts the surface, and must survive a page that never enables.
+  if (!display.frame || !display.stride || !display.width || !display.height) return;
+  const unsigned side=24, gap=12;
+  if (display.height < side+32 || display.width < 16+8*(side+gap)) return;
+  const unsigned y0=display.height-side-16;
+  for (unsigned i=0;i<8;++i) {
+    const unsigned lit=(__atomic_load_n(&bp_marks_bits,__ATOMIC_RELAXED)>>i)&1u;
+    const uint32_t color=lit ? 0xff00ff00u : 0xff800000u;
+    const unsigned x0=16+i*(side+gap), x1=x0+side-1, y1=y0+side-1;
+    for (unsigned y=y0;y<=y1;++y)
+      for (unsigned x=x0;x<=x1;++x)
+        *(volatile uint32_t *)(display.frame+(uintptr_t)y*display.stride+x*4)=color;
+  }
+}
 static uintptr_t bind_base;
 static uint64_t irq_entries,irq_entry_pc;
 static unsigned enabled, busy, started, last_draw = ~0U;
@@ -559,6 +597,13 @@ static void refresh(unsigned now) {
 }
 
 int boot_progress_active(void) { return enabled != 0; }
+// Bits 6 and 7, for the source-storage side that owns the log: whether native_source_storage_start was
+// reached at all, and whether it got past its own argument gate. They light the last two squares, so a run
+// that never reaches this file's page still says how far the storage bring-up got.
+void boot_progress_storage_mark(int arg_gate_passed) {
+  bp_mark(BP_MARK_STORAGE | (arg_gate_passed ? BP_MARK_STORAGE_ON : 0u));
+  bp_marks();
+}
 int boot_progress_pulse_anchor(uintptr_t base,uint64_t bytes,unsigned w,unsigned h,unsigned rb) {
   int accepted=enabled && bp_pulse_register(&pulse,base,bytes,w,h,rb);
   if(accepted)bp_panic_bind(&boot_progress_panic_vinfo,base,w,h,rb);
@@ -592,9 +637,12 @@ void boot_progress_cancel_scanout(void) {
 }
 void boot_progress_init(void) {
   unsigned opt=0;
+  bp_mark(BP_MARK_INIT);
   if (!PE_parse_boot_argn("boot-progress",&opt,sizeof(opt)) || (opt != 1 && opt != 2)) return;
+  bp_mark(BP_MARK_ARG);
   __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(boot_progress_frequency));
   if (!boot_progress_frequency) return;
+  bp_mark(BP_MARK_FREQ);
   boot_progress_epoch=ticks(); state.limit=120; state.stall=30;
   state.continuous=opt==2; enabled=opt;
   PE_parse_boot_argn("sheng-build-tag",build_tag,sizeof(build_tag));build_tag[sizeof(build_tag)-1]=0;
@@ -602,6 +650,17 @@ void boot_progress_init(void) {
   boot_progress_stage("PE initialized; early native mappings");
 }
 void boot_progress_bind(uintptr_t base,unsigned w,unsigned h,unsigned rb,unsigned depth) {
+  // The marks must survive a disabled page: this is the only call that ever hands this file a framebuffer,
+  // and the run being diagnosed is one where enabled is 0. Record the surface without the lock the page's
+  // own paths use, paint the marks, and only then fall through to the page itself.
+  if (base >= 0xffff000000000000ULL && depth == 32 && w >= 720 && w <= 4096 &&
+      h >= 560 && h <= 4096 && rb >= w*4 && rb <= 65536 &&
+      base <= UINTPTR_MAX-(uint64_t)h*rb) {
+    display.frame=base;display.width=w;display.height=h;display.stride=rb;
+    display.scale=w>=2160 && h>=1400?3:1;
+    bp_mark(BP_MARK_BIND);
+    bp_marks();
+  }
   if (!enabled || !take()) return;
   ++bind_count;bind_base=base;bind_depth=depth;bind_result=1;
   if (boot_progress_display_owned) { bind_result=2;release(); return; }
@@ -620,6 +679,9 @@ void boot_progress_bind(uintptr_t base,unsigned w,unsigned h,unsigned rb,unsigne
       bp_panic_bind(&boot_progress_panic_vinfo,base,w,h,rb);
     bp_clear(&display);
     draw(seconds());
+    // bp_clear and draw repaint the whole surface, so the marks painted above are gone by now. Paint them
+    // again onto the finished page: a run whose page does draw still needs to show which steps were reached.
+    bp_marks();
   }
   release();
 }
@@ -874,6 +936,7 @@ static void touch_fill(unsigned x0,unsigned y0,unsigned x1,unsigned y1,uint32_t 
       *(volatile uint32_t *)(display.frame+(uintptr_t)y*display.stride+x*4)=color;
     }
 }
+// The marks a run leaves when nothing else is visible. Bits, because one word is all the room this file has.
 // Session status rows. The 47 text rows are full, so other kits publish short status strings into this array instead: slots 0-3
 // belong to the keystore/Data work, slots 4-7 to the GPU work (docs/parallel-development.md). They are drawn right of the page text
 // (47 columns, rows 13-20), 30 ms polling, only when the text changed; a redraw of the whole screen (diagnostic resume) repaints them.
@@ -1309,9 +1372,13 @@ static void boot_progress_heap_alloc(void) {
   memset(boot_progress_ext_wide,0,2*112);
   memset(ext_drawn,0,8*48);
   __atomic_store_n(&bp_prof,prof,__ATOMIC_RELEASE);
+  bp_mark(BP_MARK_HEAP);
 }
 void boot_progress_start(void) {
+  // Marked before the gate: an unlit BP_MARK_START means kernel_bootstrap_thread never reached the call,
+  // while a lit one with no lit BP_MARK_HEAP means it was reached and disabled the page instead.
   if (!enabled || started) return;
+  bp_mark(BP_MARK_START);
   boot_progress_heap_alloc();
   // bp_prof is published last and only on success, so a null one here means the allocation failed and
   // the page has been disabled. Do not start the monitors: they and the overlay would dereference the
