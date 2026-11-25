@@ -1263,35 +1263,60 @@ static void cpu0_park(void *arg, wait_result_t result) {
 // kernel_bootstrap_thread after clock_service_create, and before started=1, so no sample is taken first.
 // build_tag is deliberately NOT here: boot_progress_init fills it from a boot argument, which is before
 // this runs, so it stays a static char[32].
+// Every one of these can return NULL, and the memsets below run unconditionally, so a failed allocation
+// was a null write that took the kernel down before SourceStorage could start the log writer: the run
+// showed the UEFI hand-off and nothing else, with no panic text anywhere to say why. Allocate first,
+// check them together, and on failure disable the page and let the kernel carry on. A boot we can read
+// a log from is worth more than a page we cannot see.
 static void boot_progress_heap_alloc(void) {
   if (bp_prof) return;
   // Order matters. Everything the interrupt path touches is assigned before bp_prof, which the interrupt
   // path tests once and treats as "all rings are live".
+  uint64_t *prof;
   bp_kern=(uint32_t *)IOMalloc((size_t)BpKernSamples*4*sizeof(uint32_t));
   bp_cpu_cnt=(uint32_t *)IOMalloc(8*64*sizeof(uint32_t));
   samples=(struct pc_sample *)IOMalloc(8*sizeof(struct pc_sample));
-  memset(samples,0,8*sizeof(struct pc_sample));
   census=(struct bp_census_row *)IOMalloc(BpCensus*sizeof(struct bp_census_row));
-  memset(census,0,BpCensus*sizeof(struct bp_census_row));
   xpc_fails=(struct bp_xpc_row *)IOMalloc(BpXpcFails*sizeof(struct bp_xpc_row));
-  memset(xpc_fails,0,BpXpcFails*sizeof(struct bp_xpc_row));
   boot_progress_page_text=(char (*)[BP_COLS])IOMalloc(48*BP_COLS);
   boot_progress_banner_text=(char (*)[120])IOMalloc(49*120);
   boot_progress_ext=(char (*)[48])IOMalloc(8*48);
   boot_progress_ext_wide=(char (*)[112])IOMalloc(2*112);
   ext_drawn=(char (*)[48])IOMalloc(8*48);
   xpc_args=(uint8_t *)IOMalloc(BpXpcArgs);
+  prof=(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t));
+  if (!bp_kern || !bp_cpu_cnt || !samples || !census || !xpc_fails || !boot_progress_page_text ||
+      !boot_progress_banner_text || !boot_progress_ext || !boot_progress_ext_wide || !ext_drawn ||
+      !xpc_args || !prof) {
+    // Keep bp_prof null so nothing that tests it treats the rings as live, and drop enabled so the
+    // monitor, the overlay and boot_log_tick's page path all stay out of the way. boot_progress_stage
+    // returns early once enabled is 0, so say this on the console where it cannot be swallowed.
+    enabled=0;
+    printf("BootProgress: heap alloc failed (kern=%p cpu=%p samples=%p census=%p xpc=%p args=%p "
+           "page=%p banner=%p ext=%p wide=%p drawn=%p prof=%p); page disabled, kernel continues\n",
+           (void *)bp_kern,(void *)bp_cpu_cnt,(void *)samples,(void *)census,(void *)xpc_fails,
+           (void *)xpc_args,(void *)boot_progress_page_text,(void *)boot_progress_banner_text,
+           (void *)boot_progress_ext,(void *)boot_progress_ext_wide,(void *)ext_drawn,(void *)prof);
+    return;
+  }
+  memset(samples,0,8*sizeof(struct pc_sample));
+  memset(census,0,BpCensus*sizeof(struct bp_census_row));
+  memset(xpc_fails,0,BpXpcFails*sizeof(struct bp_xpc_row));
   memset(xpc_args,0,BpXpcArgs);
   memset(boot_progress_page_text,0,48*BP_COLS);
   memset(boot_progress_banner_text,0,49*120);
   memset(boot_progress_ext,0,8*48);
   memset(boot_progress_ext_wide,0,2*112);
   memset(ext_drawn,0,8*48);
-  __atomic_store_n(&bp_prof,(uint64_t *)IOMalloc(BpProfSamples*sizeof(uint64_t)),__ATOMIC_RELEASE);
+  __atomic_store_n(&bp_prof,prof,__ATOMIC_RELEASE);
 }
 void boot_progress_start(void) {
   if (!enabled || started) return;
   boot_progress_heap_alloc();
+  // bp_prof is published last and only on success, so a null one here means the allocation failed and
+  // the page has been disabled. Do not start the monitors: they and the overlay would dereference the
+  // rings that are not there.
+  if (!bp_prof) { started=1; return; }
   started=1;thread_t thread;
   if(kernel_thread_start_priority(monitor,0,BASEPRI_PREEMPT,&thread)!=KERN_SUCCESS) {
     boot_progress_stage("monitor thread creation FAILED; IRQ sampling remains"); return;
