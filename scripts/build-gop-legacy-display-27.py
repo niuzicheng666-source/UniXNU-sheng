@@ -357,14 +357,18 @@ extern "C" uint64_t native_legacy_surface_allocation(OSObject *surface) {
 }
 // The board diagnostic page is not drawn on iPadOS 27: the keystore service's extension rows go nowhere.
 // With CONFIG_XNU_BOOT_PROGRESS=y the real definitions come from package/BootProgress.c, linked in through
-// libBootProgress.a; this archive is force-loaded beside it, so the five stubs below would be duplicate symbols.
+// libBootProgress.a; this archive is force-loaded beside it, so the six stubs below would be duplicate symbols.
 // They stay only for the profiles that do not build the page.
-''' + ('' if os.environ.get('XNU_BOOT_PROGRESS') == '1' else '''extern "C" {char boot_progress_ext[8][48];}
+''' + ('' if os.environ.get('XNU_BOOT_PROGRESS') == '1' else '''extern "C" {char (*boot_progress_ext)[48];}
 // No boot progress animation runs on iPadOS 27: the scanout is always free and no pulse anchors to the framebuffer.
 extern "C" int boot_progress_prepare_scanout(void) {return 1;}
 extern "C" void boot_progress_cancel_scanout(void) {}
 extern "C" void boot_progress_stage(const char *) {}
 extern "C" int boot_progress_pulse_anchor(uintptr_t,uint64_t,unsigned,unsigned,unsigned) {return 0;}
+// BootProgress.c keeps this as a pointer too; the probe calls it through a weak reference, so a missing
+// definition on a no-page profile leaves it null and the bind is skipped. An array here would make the
+// probe read the array's bytes as a pointer and write through it.
+extern "C" void boot_progress_bind(uintptr_t,unsigned,unsigned,unsigned,unsigned) {}
 '''))
 compile_cpp(support, OUT / 'LegacyDisplaySupport27.o')
 # The keystore state service (AppleKeyStoreState) and its probe, unchanged from iPadOS 17.

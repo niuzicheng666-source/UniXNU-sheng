@@ -145,6 +145,10 @@ static void bp_marks(void) {
 static uintptr_t bind_base;
 static uint64_t irq_entries,irq_entry_pc;
 static unsigned enabled, busy, started, last_draw = ~0U;
+// Set by boot_progress_heap_alloc once every ring is allocated. video_console's boot_progress_bind can run
+// (and with enabled set, draw) before kernel_bootstrap_thread reaches boot_progress_start: draw() dereferences
+// samples, so the enabled path must stay closed until this is set. The marks path does not touch the heap.
+static unsigned heap_ready;
 uint64_t boot_progress_epoch, boot_progress_frequency;
 static uint64_t irq_count, thread_count;
 static uint64_t last_pc, last_psr, last_sp;
@@ -661,7 +665,9 @@ void boot_progress_bind(uintptr_t base,unsigned w,unsigned h,unsigned rb,unsigne
     bp_mark(BP_MARK_BIND);
     bp_marks();
   }
-  if (!enabled || !take()) return;
+  // A framebuffer handed over before boot_progress_start has run leaves draw() with null rings; the marks
+  // above are the whole record for that case, and the bind is retried by every later video_console call.
+  if (!enabled || !__atomic_load_n(&heap_ready,__ATOMIC_ACQUIRE) || !take()) return;
   ++bind_count;bind_base=base;bind_depth=depth;bind_result=1;
   if (boot_progress_display_owned) { bind_result=2;release(); return; }
   display.bound=0;
@@ -1372,6 +1378,8 @@ static void boot_progress_heap_alloc(void) {
   memset(boot_progress_ext_wide,0,2*112);
   memset(ext_drawn,0,8*48);
   __atomic_store_n(&bp_prof,prof,__ATOMIC_RELEASE);
+  // Published last, after every ring above is zeroed: boot_progress_bind's enabled path now may draw.
+  __atomic_store_n(&heap_ready,1,__ATOMIC_RELEASE);
   bp_mark(BP_MARK_HEAP);
 }
 void boot_progress_start(void) {

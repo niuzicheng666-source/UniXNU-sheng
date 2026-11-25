@@ -20,7 +20,10 @@ void native_keyevents_open_refused(void) {
 }
 // sheng-aks=1: the owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
 // page's extension rows (slots 0-1): opens/calls, then selector:count per selector seen ('e' = the last answer was an error).
-extern char boot_progress_ext[8][48];
+// BootProgress.c holds this as a pointer into heap storage, not an array in __DATA: the prelinked __DATA has
+// no room for it. An array declaration here writes 47 bytes over an 8-byte pointer variable, so the type has
+// to match and the write path has to test the pointer.
+extern char (*boot_progress_ext)[48];
 volatile uint32_t native_aks_opens, native_aks_calls;
 static volatile uint32_t aks_count[96];
 static volatile int32_t aks_rc[96];
@@ -57,6 +60,7 @@ static void aks_publish(void) {
     }
     char head[48];
     snprintf(head, sizeof head, "AKS opens=%u calls=%u", native_aks_opens, native_aks_calls);
+    if (!boot_progress_ext) return;
     for (unsigned i = 0; i < 47; ++i) boot_progress_ext[0][i] = head[i] ? head[i] : ' ';
     boot_progress_ext[0][47] = 0;
     unsigned i = 0;

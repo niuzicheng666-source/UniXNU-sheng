@@ -146,8 +146,11 @@ extern "C" AdrenoHfiStartupStatus ShengGmuBuildStartup(const ShengGmuVoteInputs 
 extern "C" unsigned ShengGmuPerfVote(unsigned, unsigned *) __attribute__((weak));
 
 extern "C" {
-extern char boot_progress_ext[8][48];
-extern char boot_progress_ext_wide[2][112];
+// BootProgress.c keeps both as pointers into heap storage: the arrays no longer live in __DATA, because the
+// prelinked __DATA has no room. Declaring them as arrays here would write 47 and 112 bytes over an 8-byte
+// pointer variable, so the type must match and every write must test the pointer first.
+extern char (*boot_progress_ext)[48];
+extern char (*boot_progress_ext_wide)[112];
 struct gpb_result native_gpu_power_result;
 struct NativeAdrenoGmuContextReport native_gpu_gmu_context;
 volatile uint32_t native_gpu_power_stage;
@@ -190,6 +193,7 @@ int wr(void *, unsigned w, uint32_t off, uint32_t value) {
     return 0;
 }
 void setRow(unsigned slot, const char *text) {
+    if (!boot_progress_ext || slot >= 8) return;
     unsigned i = 0;
     for (; i < 47 && text[i]; ++i) boot_progress_ext[slot][i] = text[i];
     for (; i < 47; ++i) boot_progress_ext[slot][i] = ' ';
@@ -1426,8 +1430,9 @@ void metalRows() {
     snprintf(row, sizeof row, "K%u%s", total, tail);
     setRow(7, row);
     // GPU7/GPU8 (wide): the raw test's report line and the Turnip phase's line (T result or W watchdog sample).
-    if (d.report[0]) snprintf(boot_progress_ext_wide[0], sizeof boot_progress_ext_wide[0], "R %.63s", d.report);
-    if (d.report2[0]) snprintf(boot_progress_ext_wide[1], sizeof boot_progress_ext_wide[1], "%.63s", d.report2);
+    // 112 is the row width BootProgress.c allocates; sizeof a pointer would be 8 and truncate it.
+    if (boot_progress_ext_wide && d.report[0]) snprintf(boot_progress_ext_wide[0], 112, "R %.63s", d.report);
+    if (boot_progress_ext_wide && d.report2[0]) snprintf(boot_progress_ext_wide[1], 112, "%.63s", d.report2);
     {
         // Row 5: the newest four IOServiceOpen attempts as <process><P plugin type|F other type><MACF result of the sandbox>; 0 = admitted.
         char list[48] = {};

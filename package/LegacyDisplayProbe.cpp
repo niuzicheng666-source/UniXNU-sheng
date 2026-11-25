@@ -30,6 +30,10 @@ static IOService *activeLegacyDisplay;
 // The pulse is permanently closed before any system-frame copy.
 static IOMemoryMap *diagnosticAnchorMapping;
 extern "C" int boot_progress_pulse_anchor(uintptr_t,uint64_t,unsigned,unsigned,unsigned) __attribute__((weak_import));
+// The GIP's startHardware reaches this file with a mapped, geometry-checked surface. boot_progress_bind records it
+// and paints the reach marks whether or not the boot page is enabled, so it is the one place an image whose
+// page is disabled can still show how far it got. Absent on profiles that do not build the page (libBootProgress.a).
+extern "C" void boot_progress_bind(uintptr_t,unsigned,unsigned,unsigned,unsigned) __attribute__((weak_import));
 static IORegistryEntry *unitScaleChosen;
 static bool unitScaleAdded,unitRotationAdded;
 static void finishUnitScalePolicy(bool keep) {
@@ -415,17 +419,22 @@ __attribute__((noinline)) bool native_legacy_gop_mapping_observed(IOService *obj
     native_legacy_gop_map=(uintptr_t)mapping;native_legacy_gop_virtual=mapping->getVirtualAddress();
     native_legacy_gop_physical=mapping->getPhysicalAddress();native_legacy_gop_bytes=mapping->getLength();
     native_legacy_gop_width=width;native_legacy_gop_height=height;
-    if(boot_progress_pulse_anchor && !diagnosticAnchorMapping) {
-        PE_Video anchorVideo={};
-        if(!PE_current_console(&anchorVideo) && anchorVideo.v_depth==32 &&
-           anchorVideo.v_rowBytes<=65536 &&
-           anchorVideo.v_width==width && anchorVideo.v_height==height &&
-           anchorVideo.v_baseAddr==mapping->getPhysicalAddress() && !anchorVideo.v_rotate) {
-            mapping->retain();
-            if(boot_progress_pulse_anchor(mapping->getVirtualAddress(),mapping->getLength(),width,height,
-                (unsigned)anchorVideo.v_rowBytes))diagnosticAnchorMapping=mapping;
-            else mapping->release();
-        }
+    // One PE console read qualifies both handoffs: the pulse anchor below and, first, the boot page's bind.
+    // The bind records the surface and paints the reach marks even when the page is disabled, so this is
+    // where an image that shows no page at all still proves it reached a mapped, geometry-checked scanout.
+    PE_Video anchorVideo={};
+    const bool consoleMatches = !PE_current_console(&anchorVideo) && anchorVideo.v_depth==32 &&
+        anchorVideo.v_rowBytes<=65536 &&
+        anchorVideo.v_width==width && anchorVideo.v_height==height &&
+        anchorVideo.v_baseAddr==mapping->getPhysicalAddress() && !anchorVideo.v_rotate;
+    if(consoleMatches && boot_progress_bind)
+        boot_progress_bind(mapping->getVirtualAddress(),width,height,
+            (unsigned)anchorVideo.v_rowBytes,anchorVideo.v_depth);
+    if(consoleMatches && boot_progress_pulse_anchor && !diagnosticAnchorMapping) {
+        mapping->retain();
+        if(boot_progress_pulse_anchor(mapping->getVirtualAddress(),mapping->getLength(),width,height,
+            (unsigned)anchorVideo.v_rowBytes))diagnosticAnchorMapping=mapping;
+        else mapping->release();
     }
     native_legacy_gop_mapping_checkpoint();
     unsigned enabled=0;PE_parse_boot_argn("offline-legacy-unit-scale",&enabled,sizeof(enabled));

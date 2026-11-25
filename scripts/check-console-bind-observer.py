@@ -104,6 +104,7 @@ static unsigned bind_count,bind_result,bind_depth;
 static uintptr_t bind_base;
 static uintptr_t cleared, drawn;
 static unsigned draws;
+static unsigned heap_ready=1;  // boot_progress_heap_alloc publishes this; without it bind takes the marks-only path.
 static int take(void) { return 1; }
 static void release(void) {}
 static unsigned seconds(void) { return 74; }
@@ -118,6 +119,12 @@ int main(void) {
   boot_progress_bind(scanout,3048,2032,12192,32);
   assert(display.bound && cleared==scanout && drawn==scanout && draws==1);
   assert(boot_progress_panic_vinfo.frame==scanout);
+  // Before the heap is published the framebuffer is recorded for the marks but no page is drawn: draw()
+  // would dereference null rings. display.bound stays clear because bp_clear/draw never run.
+  heap_ready=0;
+  boot_progress_bind(surface,3048,2032,12192,32);
+  assert(!display.bound && display.frame==surface && cleared==scanout && draws==1);
+  heap_ready=1;
   pulse.ready=1; // A retained anchor is separately qualified by check-boot-pulse.
   boot_progress_bind(surface,3048,2032,12192,32);
   assert(display.bound && cleared==surface && drawn==surface && draws==2);
@@ -131,7 +138,7 @@ int main(void) {
   boot_progress_display_owned=1;
   boot_progress_bind(surface,3048,2032,12192,32);
   assert(display.frame==scanout); // A completed explicit handoff blocks rebinding.
-  puts("PASS: actual bind redirects writes to a new valid base; depth 30 disables drawing; neither needs handoff");
+  puts("PASS: actual bind redirects writes to a new valid base; depth 30 disables drawing; a bind before the heap is published paints no page; neither needs handoff");
 }
 '''
     with tempfile.TemporaryDirectory(prefix='console-bind-') as tmp:
