@@ -4,6 +4,9 @@
 //   2  vote the QUP clocks, wait for them, configure the pins, read the GENI engine identity
 //   3  GENI SPI init and clock, then reset the touch bootloader and read the chip id
 //   4  host-download the firmware, start scanning and process THP frames (needs the generated firmware object)
+//   5  FTS read-only mode (babylon's ST FingerTip FST2): stages 1-3 with the FTS part's own rails, clock,
+//      SPI-pin configuration and chip id (0x3652), then stop. It returns from its own path, so stage 4's
+//      firmware download is unreachable, and it writes no touch data to the part.
 // Every stage reports on the diagnostic page; the first failure stops the sequence. Nothing here is validated on the
 // device until a boot has shown it. Board constants and their sources are in TouchBoard.h.
 #include <IOKit/IOService.h>
@@ -18,6 +21,7 @@
 #include <IOKit/IOLocks.h>
 #include <pexpert/pexpert.h>
 #include "AppsSmmuLock.h"
+#include "QcomRpmh.h"   // the FTS rails go out as active TCS requests, as AudioProbe::micRail() does
 extern "C" {
 #include "GeniSpi.h"
 #include "NvtProtocol.h"
@@ -150,6 +154,9 @@ struct Session {
     uint64_t levelHz[TB_DFS_LEVELS];
     unsigned level = 0, div = 0;
     uint64_t actualHz = 0;
+    // FTS (babylon) read-only path: its own reset pin, rail window and the chip id it read.
+    Region tlmmReset, rsc;
+    uint32_t ftsId = 0;
 };
 
 int busXfer(void *ctx, const uint8_t *tx, uint8_t *rx, size_t len) {
@@ -617,12 +624,147 @@ static bool armTouchIrq(Session &s) {
     return true;
 }
 
+/* ---- ST FingerTip FST2, stages 1-3 only (babylon) ------------------------------------------------
+ * READ-ONLY bring-up: power, pins, QUP1 clock votes, GENI SPI, the chip's own SPI-pin configuration,
+ * then the chip id. It never parses, downloads or starts firmware, and it never writes touch data to
+ * the part. The board keeps its factory hole-punch calibration; nothing here can replace it.
+ *
+ * This is a separate path on purpose: it returns from its own function before touchThread's Novatek
+ * stages run, so nvt_download_firmware() is unreachable when this mode is on -- not skipped by an
+ * `if`, but absent from the control flow. sheng-touch=5 selects it; a stage above 4 would otherwise
+ * be the Novatek firmware download, which must never run against an FTS part.
+ *
+ * The chip layer's byte framing follows fts_read()/fts_write() of the zizhan fst2 6.0.3 driver: the
+ * opcode and address go out, then one dummy byte precedes every read. */
+static const uint8_t kFtsOpHwWrite = 0xfa;
+static const uint8_t kFtsOpHwRead = 0xfb;
+
+// One chip-select, opcode + big-endian address out; for a read, head + 1 + len clocks with the data
+// landing after the dummy byte.
+static int ftsTransfer(struct geni_spi &spi, uint8_t op, uint32_t address, unsigned address_bytes, const uint8_t *tx,
+                       uint8_t *rx, uint32_t length, uint8_t *txbuf, uint8_t *rxbuf, uint32_t buf_len) {
+    const uint32_t head = 1 + address_bytes;
+    // One chip select throughout: opcode + address out, then (dummy + length) clocks in for a read.
+    const uint32_t total = head + (rx ? 1 + length : length);
+    if (total > buf_len) return -22;
+    memset(txbuf, 0, total);
+    txbuf[0] = op;
+    for (unsigned i = 0; i < address_bytes; ++i) txbuf[1 + i] = static_cast<uint8_t>(address >> (8 * (address_bytes - 1 - i)));
+    if (!rx && tx && length) memcpy(txbuf + head, tx, length);
+    int r = geni_spi_transfer(&spi, txbuf, rx ? rxbuf : nullptr, total, 0);
+    if (r) return r;
+    if (rx && length) memcpy(rx, rxbuf + head + 1, length);
+    return 0;
+}
+
+static int ftsHwWrite8(struct geni_spi &spi, uint32_t address, uint8_t value, uint8_t *txbuf, uint8_t *rxbuf, uint32_t buf_len) {
+    return ftsTransfer(spi, kFtsOpHwWrite, address, 4, &value, nullptr, 1, txbuf, rxbuf, buf_len);
+}
+
+static int ftsHwRead(struct geni_spi &spi, uint32_t address, uint8_t *data, uint32_t length, uint8_t *txbuf, uint8_t *rxbuf,
+                     uint32_t buf_len) {
+    return ftsTransfer(spi, kFtsOpHwRead, address, 4, nullptr, data, length, txbuf, rxbuf, buf_len);
+}
+
+// configure_spi4() of the reference driver: the chip's SPI pins need this before the first read.
+static int ftsConfigureSpi4(struct geni_spi &spi, uint8_t *txbuf, uint8_t *rxbuf, uint32_t buf_len) {
+    int r = ftsHwWrite8(spi, TB_FTS_HW_GPIO_PU, TB_FTS_HW_GPIO_PU_VALUE, txbuf, rxbuf, buf_len);
+    if (r) return r;
+    r = ftsHwWrite8(spi, TB_FTS_HW_MISO_CONFIG, TB_FTS_HW_MISO_VALUE, txbuf, rxbuf, buf_len);
+    if (r) return r;
+    return ftsHwWrite8(spi, TB_FTS_HW_SPI4_CONFIG, TB_FTS_HW_SPI4_VALUE, txbuf, rxbuf, buf_len);
+}
+
+// Drive the reset line (GPIO24, active high) through TLMM: mux to plain GPIO (function 0), then output.
+static void ftsReset(Session &s) {
+    if (!s.tlmmReset.va) return;
+    volatile uint32_t *ctl = reinterpret_cast<volatile uint32_t *>(s.tlmmReset.va);
+    ctl[0] = tb_pin_cfg(0, TB_FTS_DRIVE_6MA) | (1u << 9);   // function 0 (GPIO), 6 mA, output enable
+    __asm__ volatile("dsb sy" ::: "memory");
+    ctl[1] = 0;                                             // drive low
+    __asm__ volatile("dsb sy" ::: "memory");
+    IOSleep(20);
+    ctl[1] = 1;                                             // release high
+    __asm__ volatile("dsb sy" ::: "memory");
+    IOSleep(20);
+}
+
+/* Stage 1-3 for the FTS part. Returns 0 on success, or the failing step. */
+static int ftsProbe(Session &s, unsigned hz) {
+    uint8_t txbuf[64], rxbuf[64];
+    if (!mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_FTS_GPIO_RESET), 0x1000, s.tlmmReset)) {fail(1, -12); return 1;}
+    // The reset pin must be an output before the chip is asked anything.
+    ftsReset(s);
+    s.level = 0;
+    s.div = 0;
+    s.actualHz = 0;
+    mark(s, 30);
+    int r = geni_spi_setup(&s.spi, ((TB_FTS_SPI_MODE & 1) ? GENI_SPI_CPHA : 0) | ((TB_FTS_SPI_MODE & 2) ? GENI_SPI_CPOL : 0), 0);
+    if (r) {fail(3, r); return 3;}
+    (void)hz;
+    // Chip's own SPI pin configuration, then the id.
+    mark(s, 32);
+    r = ftsConfigureSpi4(s.spi, txbuf, rxbuf, sizeof txbuf);
+    if (r) {fail(3, r); return 3;}
+    mark(s, 33);
+    uint8_t id[2] = {0, 0};
+    r = ftsHwRead(s.spi, TB_FTS_HW_CHIP_ID, id, 2, txbuf, rxbuf, sizeof txbuf);
+    if (r) {fail(3, r); return 3;}
+    s.chip.id[0] = id[0];
+    s.chip.id[1] = id[1];
+    s.ftsId = (static_cast<uint32_t>(id[0]) << 8) | id[1];
+    s.vals[18] = s.ftsId;
+    mark(s, 34);
+    if (s.ftsId != TB_FTS_CHIP_ID) {fail(3, -19); return 3;}   // -19: no such device
+    return 0;
+}
+
+/* The rails: dvdd (L12B, 1.8 V) first, then avdd (L16B, 2.8 V). Same TCS mechanics as
+ * AudioProbe::micRail(), on the same TCS 2 under the same AppsSmmuLock: drv@2's tcs-config allocates
+ * TCS 0-3 only, and 0-2 are the ones working code already drives. */
+static bool ftsRail(Session &s) {
+    constexpr size_t kDbSize = 0x20000;
+    struct CmdDbCopy {
+        uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kDbSize));
+        ~CmdDbCopy() {if (bytes) IOFreeData(bytes, kDbSize);}
+    } copy;
+    uint8_t *const db = copy.bytes;
+    if (!db) return false;
+    Region dbw;
+    if (!mapRegion(0x81c60000ULL, kDbSize, dbw)) return false;
+    for (size_t i = 0; i < kDbSize; i += 4) {const uint32_t w = rd32(dbw.va, static_cast<uint32_t>(i)); memcpy(db + i, &w, 4);}
+    QcomRpmhResource dvdd, avdd;
+    if (qcom_cmd_db_find(db, kDbSize, TB_FTS_DVDD_RESOURCE, &dvdd)) return false;
+    if (qcom_cmd_db_find(db, kDbSize, TB_FTS_AVDD_RESOURCE, &avdd)) return false;
+    if (!mapRegion(TB_FTS_RSC_BASE, TB_FTS_RSC_SIZE, s.rsc)) return false;
+    const QcomRscLayout layout = qcom_rsc_layout(rd32(s.rsc.va, 0));
+    AppsSmmuLock tcsOwner;
+    auto send = [&](uint32_t address, uint32_t value) {
+        QcomRpmhWrite writes[16];
+        const unsigned n = qcom_rpmh_active_request(&layout, TB_FTS_RSC_TCS, &address, &value, 1, writes, 16);
+        for (unsigned i = 0; i < n; ++i) wr32(s.rsc.va, 0xd00 + writes[i].offset, writes[i].value);
+        IOSleep(2);
+        const unsigned m = qcom_rpmh_finish(&layout, TB_FTS_RSC_TCS, writes, 16);
+        for (unsigned i = 0; i < m; ++i) wr32(s.rsc.va, 0xd00 + writes[i].offset, writes[i].value);
+    };
+    send(dvdd.address + 8, 7);                 // high power mode
+    send(dvdd.address, TB_FTS_DVDD_UV);        // 1.8 V, at the regulator's min = max
+    send(dvdd.address + 4, 1);
+    send(avdd.address + 8, 7);
+    send(avdd.address, TB_FTS_AVDD_UV);        // 2.8 V, at the regulator's min = max (NOT 3.3 V)
+    send(avdd.address + 4, 1);
+    return true;
+}
+
 static void touchThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(),"sheng-touch");
     Session *s = static_cast<Session *>(IOMallocType(Session));
     if (!s) {fail(0, -12); return;}
     bzero(s, sizeof *s);
     unsigned stage = native_touch_stage_req, hz = TB_SPI_DEFAULT_HZ;
+    // sheng-touch=5 asks for the FTS read-only probe. It reuses stages 1-3 (power, pins, clocks, GENI
+    // SPI) and stops there; there is no stage 4 or 5 in its path.
+    const bool ftsMode = stage >= 5;
     PE_parse_boot_argn("sheng-touch-hz", &hz, sizeof hz);
     if (hz < 100000 || hz > TB_SPI_MAX_HZ) hz = TB_SPI_DEFAULT_HZ;
     do {
@@ -634,6 +776,17 @@ static void touchThread(void *, wait_result_t) {
         native_touch_stage_done = 2;
         rows(*s);
         if (stage < 3) break;
+        // FTS read-only mode (sheng-touch=5): its own path, then leave. The Novatek identification,
+        // firmware download and scanning below are never entered -- this returns first.
+        if (ftsMode) {
+            if (!ftsRail(*s)) {fail(2, -6); rows(*s); break;}
+            // The FTS part is brought up at its own clock (4 MHz), not the Novatek default.
+            if (!openBus(*s, TB_FTS_SPI_HZ) || !configureClock(*s, TB_FTS_SPI_HZ)) break;
+            if (ftsProbe(*s, TB_FTS_SPI_HZ)) {rows(*s); break;}
+            native_touch_stage_done = 3;
+            rows(*s);
+            break;                      // read-only: no firmware stage exists after this point
+        }
         if (!openBus(*s, hz) || !configureClock(*s, hz)) break;
         s->tx = static_cast<uint8_t *>(IOMalloc(NVT_TRANSFER_LEN + 8));
         s->rx = static_cast<uint8_t *>(IOMalloc(NVT_READ_MAX + 2));
@@ -919,7 +1072,8 @@ static void swipeThread(void *parameter, wait_result_t) {
 extern "C" void native_touch_probe(void) {
     unsigned stage = 0;
     if (!PE_parse_boot_argn("sheng-touch", &stage, sizeof stage) || stage < 1 || native_touch_stage_req) return;
-    if (stage > 4) stage = 4;
+    // 5 is the FTS read-only mode and must survive the clamp: 4 is the Novatek firmware download.
+    if (stage > 5) stage = 5;
     native_touch_stage_req = stage;
     thread_t thread = nullptr;
     if (kernel_thread_start(touchThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
