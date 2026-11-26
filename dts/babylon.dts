@@ -23,6 +23,45 @@
         status = "okay";
     };
 
+    /* ST FingerTip FST2 (st,spi-pri of the stock dtbo fragment@36) on QUP1 SE4.
+     *
+     * The node is a REQUEST MARKER, not an export. It is deliberately status = "disabled":
+     * devicetree.py exports a hardware node only when it carries unixnu,adt-name AND enabled(),
+     * and arm_io_window() would then fold reg=0xa90000 into the arm-io base. That base must be
+     * 16 MiB aligned and non-zero, so an SE below it would either fail the build ("an exported
+     * register lies below 16 MiB") or move the SoC base the kernel reads. Nothing here is
+     * exported, so the ADT is byte-for-byte what it was.
+     *
+     * pong_fts.c is NOT used: it is not in this repository and needs sys/pong_input.h and
+     * pong_touch_post(), which exist only in zizhan's Pong input stack. The driver is the FTS
+     * stage 1-3 path in package/TouchProbe.cpp, driven by its own FTS_* constants in
+     * package/TouchBoard.h (TouchBoard.h is a header, not hardware, so it does not need this
+     * node). Every register, pin, clock and rail value is written there, past devicetree.py's
+     * hardware_properties() whitelist.
+     *
+     * Values below are the stock dtbo/baseline-DTB facts, kept with the node as the record. */
+    fts-pri {
+        compatible = "st,spi-pri";
+        status = "disabled";
+        /* apps_rsc@17a00000 drv@2 base (the drv-2 reg entry is 0x17a20000), where
+         * AudioProbe::micRail() already sends its LDO votes. */
+        unixnu,rsc-base = <0x17a20000>;
+        /* vboot baseline DTB: /soc/qcom,qupv3_1_geni_se@ac0000/spi@a90000 reg 0xa90000 size 0x4000 */
+        unixnu,se-base = <0xa90000>;
+        /* qupv3_se4_spi_miso/mosi/clk/cs_active: gpio44/45/46 -> qup1_se4_l0/l1/l2, cs gpio47 */
+        unixnu,spi-gpios = <44 45 46 47>;
+        unixnu,irq-gpio = <25>;
+        unixnu,reset-gpio = <24>;
+        unixnu,clock-vote = <0x52008>;
+        unixnu,clock-rcg = <0x184f0>;
+        /* dvdd-supply -> L12B (pm_humu_l12, 1.8 V), avdd-supply -> L16B (pm_humu_l16, 2.8 V).
+         * 2.8 V is the regulator's max: 3.3 V would be out of range. */
+        unixnu,supply = "ldob12", "ldob16";
+        unixnu,voltage-uv = <1800000 2800000>;
+        unixnu,spi-hz = <4000000>;
+        unixnu,chip-id = <0x3652>;
+    };
+
     memory@80000000 {
         device_type = "memory";
         /* The low bank the ADT describes. This pair is not what bounds the loader's exclusion

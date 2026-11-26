@@ -54,6 +54,49 @@
 #define TB_SPI_MAX_HZ 19200000u
 
 static inline uint32_t tb_pin_cfg(unsigned func, unsigned drive_code) {return (func&15u)<<2|(drive_code&7u)<<6;}   // pull disabled
+
+/* ---- ST FingerTip FST2 (babylon's inner touch, "st,spi-pri") ------------------------------------
+ * babylon (Xiaomi MIX Fold 3) wires the same serial engine and the same four pins as sheng, so every
+ * bus constant above already applies. Read from the stock factory images on 2026-11-27, not assumed:
+ *   dtbo.img fragment@36 (qupv3_se4_spi -> /soc/qcom,qupv3_1_geni_se@ac0000/spi@a90000):
+ *     compatible "st,spi-pri", interrupt-parent tlmm, interrupts <25 0x2008>,
+ *     fts,irq-gpio <&tlmm 25 0x2008>, fts,reset-gpio <&tlmm 24 0x0>,
+ *     avdd-supply -> L16B (via __fixups__ L16B), dvdd-supply -> L12B (via __fixups__ L12B)
+ *   vendor_boot.img baseline DTB:
+ *     spi@a90000 reg <0xa90000 0x4000>; qupv3_se4_spi_{miso,mosi,clk,cs}_active drive-strength 6,
+ *     bias-pull-down, function qup1_se4_l0..l3 (one slot per pin)
+ *   apps_rsc@17a00000 drv@2: rpmh-regulator-ldob12 -> pm_humu_l12 1800000 uV (min = max = init),
+ *                            rpmh-regulator-ldob16 -> pm_humu_l16 2800000 uV (min = max = init)
+ * L16B is 2.8 V, NOT 3.3 V: regulator-max-microvolt is 2800000, so a 3.3 V vote would be out of range.
+ * The names differ from the dtbo's node names: the vote goes by qcom,resource-name "ldob12"/"ldob16"
+ * as AudioProbe::micRail() does for "ldob15". */
+#define TB_FTS_SE_BASE TB_SE_BASE            // same engine as sheng: spi@a90000 (0xa90000)
+#define TB_FTS_SE_SIZE TB_SE_SIZE
+#define TB_FTS_RSC_BASE 0x0017a20000ULL      // apps_rsc drv@2, where micRail's LDO votes already go
+#define TB_FTS_RSC_SIZE 0x10000ULL
+#define TB_FTS_RSC_TCS 2                     // the TCS micRail() already drives, under the same AppsSmmuLock.
+                                             // drv@2 tcs-config [2,3,0, 2,1,2, 3,0,4, 1] allocates 3+1+0 = 4 TCS
+                                             // (0-3), so 4 does not exist; 0-2 are the ones working code uses.
+#define TB_FTS_GPIO_IRQ 25                    // fts,irq-gpio <&tlmm 25 0x2008>
+#define TB_FTS_GPIO_RESET 24                  // fts,reset-gpio <&tlmm 24 0x0>, active high
+#define TB_FTS_DRIVE_6MA TB_DRIVE_6MA         // every active config: drive-strength = <6>
+#define TB_FTS_SPI_MODE 0                     // st,spi-pri sets neither spi-cpha nor spi-cpol
+#define TB_FTS_SPI_HZ 4000000u                // the bring-up clock the task fixed; the part runs far higher
+#define TB_FTS_CHIP_ID 0x3652u                // FST2 ("spruce")
+/* The chip's own SPI-pin configuration, from fts_configure_spi4() of the zizhan fst2 6.0.3 driver. It
+ * must be written before the first read or the chip answers nothing. */
+#define TB_FTS_HW_GPIO_PU 0x20000034u
+#define TB_FTS_HW_MISO_CONFIG 0x2000003eu
+#define TB_FTS_HW_SPI4_CONFIG 0x2000002du
+#define TB_FTS_HW_GPIO_PU_VALUE 0x02
+#define TB_FTS_HW_MISO_VALUE 0x07
+#define TB_FTS_HW_SPI4_VALUE 0x02
+#define TB_FTS_HW_CHIP_ID 0x20000000u
+/* Power: dvdd (L12B 1.8 V) first, then avdd (L16B 2.8 V), as the task fixed. */
+#define TB_FTS_DVDD_RESOURCE "ldob12"
+#define TB_FTS_AVDD_RESOURCE "ldob16"
+#define TB_FTS_DVDD_UV 1800000u
+#define TB_FTS_AVDD_UV 2800000u
 static inline uint32_t tb_tlmm_ctl(unsigned gpio) {return (uint32_t)gpio*TB_GPIO_STRIDE;}
 static inline uint32_t tb_tlmm_io(unsigned gpio) {return (uint32_t)gpio*TB_GPIO_STRIDE+4;}
 
