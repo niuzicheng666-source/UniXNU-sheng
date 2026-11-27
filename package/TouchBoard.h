@@ -83,6 +83,10 @@ static inline uint32_t tb_pin_cfg(unsigned func, unsigned drive_code) {return (f
 #define TB_FTS_SPI_MODE 0                     // st,spi-pri sets neither spi-cpha nor spi-cpol
 #define TB_FTS_SPI_HZ 4000000u                // the bring-up clock the task fixed; the part runs far higher
 #define TB_FTS_CHIP_ID 0x3652u                // FST2 ("spruce")
+/* This board's touch part, not a mode: babylon has the FTS2 and no Novatek device at all, so the
+ * probe's Novatek stages are dead code here and are refused structurally in TouchProbe.cpp rather
+ * than left reachable through a stage number. */
+#define TB_IS_FTS_BOARD 1
 /* The chip's own SPI-pin configuration, from fts_configure_spi4() of the zizhan fst2 6.0.3 driver. It
  * must be written before the first read or the chip answers nothing. */
 #define TB_FTS_HW_GPIO_PU 0x20000034u

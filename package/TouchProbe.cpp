@@ -630,9 +630,9 @@ static bool armTouchIrq(Session &s) {
  * the part. The board keeps its factory hole-punch calibration; nothing here can replace it.
  *
  * This is a separate path on purpose: it returns from its own function before touchThread's Novatek
- * stages run, so nvt_download_firmware() is unreachable when this mode is on -- not skipped by an
- * `if`, but absent from the control flow. sheng-touch=5 selects it; a stage above 4 would otherwise
- * be the Novatek firmware download, which must never run against an FTS part.
+ * stages run, so nvt_download_firmware() is absent from the control flow on this board, not merely
+ * skipped by a condition. Every stage number 3 and up -- including the default sheng-touch=5 in
+ * board.toml's plain "Boot" entry, and the older 4 -- selects it and stops there.
  *
  * The chip layer's byte framing follows fts_read()/fts_write() of the zizhan fst2 6.0.3 driver: the
  * opcode and address go out, then one dummy byte precedes every read. */
@@ -762,9 +762,11 @@ static void touchThread(void *, wait_result_t) {
     if (!s) {fail(0, -12); return;}
     bzero(s, sizeof *s);
     unsigned stage = native_touch_stage_req, hz = TB_SPI_DEFAULT_HZ;
-    // sheng-touch=5 asks for the FTS read-only probe. It reuses stages 1-3 (power, pins, clocks, GENI
-    // SPI) and stops there; there is no stage 4 or 5 in its path.
-    const bool ftsMode = stage >= 5;
+    // This board's part is an ST FTS2, so the default `sheng-touch=4` from board.toml (the plain
+    // "Boot" entry) selects the FTS read-only path, and so does 5. It keeps stages 1-3 (power, pins,
+    // clocks, GENI SPI) and stops there: there is no stage 4 in its path, and the Novatek stage
+    // below is unreachable by construction, not skipped by a condition on the stage number.
+    const bool ftsMode = TB_IS_FTS_BOARD && stage >= 3;
     PE_parse_boot_argn("sheng-touch-hz", &hz, sizeof hz);
     if (hz < 100000 || hz > TB_SPI_MAX_HZ) hz = TB_SPI_DEFAULT_HZ;
     do {
@@ -776,8 +778,9 @@ static void touchThread(void *, wait_result_t) {
         native_touch_stage_done = 2;
         rows(*s);
         if (stage < 3) break;
-        // FTS read-only mode (sheng-touch=5): its own path, then leave. The Novatek identification,
-        // firmware download and scanning below are never entered -- this returns first.
+        // This board's panel is an ST FTS2, so stage 3 and above are the FTS read-only path here: its
+        // own rails, clock, pins and chip id, then leave. The Novatek identification, firmware download
+        // and scanning below are never entered -- every exit of this branch breaks.
         if (ftsMode) {
             if (!ftsRail(*s)) {fail(2, -6); rows(*s); break;}
             // The FTS part is brought up at its own clock (4 MHz), not the Novatek default.
@@ -844,6 +847,16 @@ static void touchThread(void *, wait_result_t) {
         native_touch_stage_done = 3;
         rows(*s);
         if (stage < 4) break;
+        if (TB_IS_FTS_BOARD) {
+            // Second lock, deliberately not a compile-time exclusion: the FTS branch above always breaks
+            // before this point, so this is unreachable today. If a future edit lets control fall through,
+            // it stops here instead of running nvt_fw_parse/nvt_download_firmware against a part that is
+            // not a Novatek chip at all. The code below stays compiled (so no helper turns unused) but
+            // no stage number, 4 or 5, can reach it on this board.
+            fail(8, -19);
+            rows(*s);
+            break;
+        }
         if (!&native_touch_firmware || !&native_touch_firmware_size || !native_touch_firmware_size) {fail(8, -2); break;}
         mark(*s, 8);
         struct nvt_fw fw;
@@ -1072,7 +1085,8 @@ static void swipeThread(void *parameter, wait_result_t) {
 extern "C" void native_touch_probe(void) {
     unsigned stage = 0;
     if (!PE_parse_boot_argn("sheng-touch", &stage, sizeof stage) || stage < 1 || native_touch_stage_req) return;
-    // 5 is the FTS read-only mode and must survive the clamp: 4 is the Novatek firmware download.
+    // On this board 3 and above are all the FTS read-only path, so the clamp only has to keep the value
+    // in the range the probe records; it no longer guards a firmware stage.
     if (stage > 5) stage = 5;
     native_touch_stage_req = stage;
     thread_t thread = nullptr;
