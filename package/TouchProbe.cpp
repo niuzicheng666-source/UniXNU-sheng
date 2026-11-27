@@ -722,7 +722,9 @@ static int ftsProbe(Session &s, unsigned hz) {
 /* The rails: dvdd (L12B, 1.8 V) first, then avdd (L16B, 2.8 V). Same TCS mechanics as
  * AudioProbe::micRail(), on the same TCS 2 under the same AppsSmmuLock: drv@2's tcs-config allocates
  * TCS 0-3 only, and 0-2 are the ones working code already drives. */
-static bool ftsRail(Session &s) {
+// Kept whole, not deleted: this bisect build only removes its call site, so the next build restores the
+// call and nothing else changes. unused marks it for the compiler so -Werror accepts the orphan.
+[[maybe_unused]] static bool ftsRail(Session &s) {
     constexpr size_t kDbSize = 0x20000;
     struct CmdDbCopy {
         uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kDbSize));
@@ -782,7 +784,13 @@ static void touchThread(void *, wait_result_t) {
         // own rails, clock, pins and chip id, then leave. The Novatek identification, firmware download
         // and scanning below are never entered -- every exit of this branch breaks.
         if (ftsMode) {
-            if (!ftsRail(*s)) {fail(2, -6); rows(*s); break;}
+            // Bisect build: the rails are the only part of this path that drives RPMh, so stage 3 runs
+            // without them here. The part stays unpowered, ftsProbe() cannot get an id, and that failure
+            // is the intended result -- this build answers one question only: does skipping the rail
+            // clear the hang at the three-colour bars? The ftsRail() call goes back before any
+            // conclusion is drawn about the chip. Old image's stage 1-2 (enable: clock votes, QUP1
+            // pinmux) already ran without hanging under sheng-touch=4, so it is not the suspect.
+            mark(*s, 31);
             // The FTS part is brought up at its own clock (4 MHz), not the Novatek default.
             if (!openBus(*s, TB_FTS_SPI_HZ) || !configureClock(*s, TB_FTS_SPI_HZ)) break;
             if (ftsProbe(*s, TB_FTS_SPI_HZ)) {rows(*s); break;}
