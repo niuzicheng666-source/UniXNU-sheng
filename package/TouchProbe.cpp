@@ -689,8 +689,10 @@ static void ftsReset(Session &s) {
     IOSleep(20);
 }
 
-/* Stage 1-3 for the FTS part. Returns 0 on success, or the failing step. */
-static int ftsProbe(Session &s, unsigned hz) {
+/* Stage 1-3 for the FTS part. Returns 0 on success, or the failing step.
+ * Kept whole, not deleted: the 19.2 MHz bisect build only removes its call site, so the next build
+ * restores the call and nothing else changes. unused marks it for the compiler so -Werror accepts it. */
+[[maybe_unused]] static int ftsProbe(Session &s, unsigned hz) {
     uint8_t txbuf[64], rxbuf[64];
     if (!mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_FTS_GPIO_RESET), 0x1000, s.tlmmReset)) {fail(1, -12); return 1;}
     // The reset pin must be an output before the chip is asked anything.
@@ -784,20 +786,24 @@ static void touchThread(void *, wait_result_t) {
         // own rails, clock, pins and chip id, then leave. The Novatek identification, firmware download
         // and scanning below are never entered -- every exit of this branch breaks.
         if (ftsMode) {
-            // Bisect build: the rails are the only part of this path that drives RPMh, so stage 3 runs
-            // without them here. The part stays unpowered, ftsProbe() cannot get an id, and that failure
-            // is the intended result -- this build answers one question only: does skipping the rail
-            // clear the hang at the three-colour bars? The ftsRail() call goes back before any
-            // conclusion is drawn about the chip. Old image's stage 1-2 (enable: clock votes, QUP1
-            // pinmux) already ran without hanging under sheng-touch=4, so it is not the suspect.
+            // Bisect build, second cut: ftsRail() and now ftsProbe() are both out of the call path, so
+            // stage 3 stops right after the clock is set. The earlier cut (0140bac) kept the probe and
+            // dropped only the rails; it still hung at the three-colour bars, and so did a17a01f with
+            // the bus moved back to 19.2 MHz. Both of those are still consistent with the hang living
+            // in ftsReset()/geni_spi_setup()/the chip transfers rather than in the rails or the clock.
+            // This build separates them: if stage 3 now completes and the run reaches the desktop with
+            // the ring buffer written, openBus()+configureClock() are cleared and the three remaining
+            // calls are the whole suspect list. Both functions go back before any conclusion about
+            // the chip is drawn.
             mark(*s, 31);
-            // Single variable this build: the bus runs at the clock the old image already proved on this
-            // engine (TB_SPI_DEFAULT_HZ, 19.2 MHz -- the board DT's spi-max-frequency and the rate the
-            // Novatek stages ran at on out-45136340399). Only this call changes; ftsRail() is still
-            // skipped, so a hang here belongs to the GENI transfer or ftsReset(), not to the clock vote.
-            // TB_FTS_SPI_HZ stays defined and still reaches ftsProbe(), which ignores its hz argument.
+            // Single variable this build: the FTS probe itself is out. The bus still opens and is still
+            // clocked at the rate the old image already proved on this engine (TB_SPI_DEFAULT_HZ,
+            // 19.2 MHz -- the board DT's spi-max-frequency), and ftsRail() is still skipped, so stage 3
+            // ends the moment the clock is configured. A hang here belongs to openBus()/configureClock()
+            // and to nothing in the FTS path; reaching the desktop with a working ring buffer (which
+            // a17a01f did not, at this clock) clears the GENI engine and leaves ftsReset(),
+            // geni_spi_setup() and the two chip transfers as the remaining suspects.
             if (!openBus(*s, TB_SPI_DEFAULT_HZ) || !configureClock(*s, TB_SPI_DEFAULT_HZ)) break;
-            if (ftsProbe(*s, TB_FTS_SPI_HZ)) {rows(*s); break;}
             native_touch_stage_done = 3;
             rows(*s);
             break;                      // read-only: no firmware stage exists after this point
