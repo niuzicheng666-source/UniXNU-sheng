@@ -791,8 +791,12 @@ static void touchThread(void *, wait_result_t) {
             // conclusion is drawn about the chip. Old image's stage 1-2 (enable: clock votes, QUP1
             // pinmux) already ran without hanging under sheng-touch=4, so it is not the suspect.
             mark(*s, 31);
-            // The FTS part is brought up at its own clock (4 MHz), not the Novatek default.
-            if (!openBus(*s, TB_FTS_SPI_HZ) || !configureClock(*s, TB_FTS_SPI_HZ)) break;
+            // Single variable this build: the bus runs at the clock the old image already proved on this
+            // engine (TB_SPI_DEFAULT_HZ, 19.2 MHz -- the board DT's spi-max-frequency and the rate the
+            // Novatek stages ran at on out-45136340399). Only this call changes; ftsRail() is still
+            // skipped, so a hang here belongs to the GENI transfer or ftsReset(), not to the clock vote.
+            // TB_FTS_SPI_HZ stays defined and still reaches ftsProbe(), which ignores its hz argument.
+            if (!openBus(*s, TB_SPI_DEFAULT_HZ) || !configureClock(*s, TB_SPI_DEFAULT_HZ)) break;
             if (ftsProbe(*s, TB_FTS_SPI_HZ)) {rows(*s); break;}
             native_touch_stage_done = 3;
             rows(*s);
