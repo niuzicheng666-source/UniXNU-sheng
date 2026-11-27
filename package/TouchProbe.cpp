@@ -783,9 +783,12 @@ static void touchThread(void *, wait_result_t) {
         // and scanning below are never entered -- every exit of this branch breaks.
         if (ftsMode) {
             if (!ftsRail(*s)) {fail(2, -6); rows(*s); break;}
-            // The FTS part is brought up at its own clock (4 MHz), not the Novatek default.
-            if (!openBus(*s, TB_FTS_SPI_HZ) || !configureClock(*s, TB_FTS_SPI_HZ)) break;
-            if (ftsProbe(*s, TB_FTS_SPI_HZ)) {rows(*s); break;}
+            // The bus is brought up at the clock this engine already ran at on out-45136340399
+            // (TB_SPI_DEFAULT_HZ, 19.2 MHz -- the board DT's spi-max-frequency), not the 4 MHz
+            // bring-up rate: the desktopping image ran GENI-SPI transfers at 19.2 MHz on this same
+            // engine, so no clock that has not been seen working is introduced here.
+            if (!openBus(*s, TB_SPI_DEFAULT_HZ) || !configureClock(*s, TB_SPI_DEFAULT_HZ)) break;
+            if (ftsProbe(*s, TB_SPI_DEFAULT_HZ)) {rows(*s); break;}
             native_touch_stage_done = 3;
             rows(*s);
             break;                      // read-only: no firmware stage exists after this point
