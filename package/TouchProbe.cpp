@@ -199,6 +199,15 @@ void fail(unsigned step, int code) {
 void rows(const Session &s);
 void mark(const Session &s, unsigned step) {native_touch_step = step; rows(s);}
 
+/* Ring tracing. Every stage of the FTS path reports through native_touch_rows[] and native_touch_step, which
+ * only the diagnostic page displays -- and an image built without the page (libBootProgress.a not force-loaded)
+ * has no page at all, so a stage that hangs leaves nothing behind: out-45136340399's base with sheng-touch=5
+ * stopped the boot at ~68 s with the sda30 ring silent from "SourceStorage: Data disk started" onward. printf
+ * is what writes that ring (SourceStorage.cpp:80 reaches it the same way), so each stage brackets itself here:
+ * the last "in" line without its "out" is the stage that hung, and its rc names the failure when it returns. */
+void traceIn(const char *what) {printf("fts-trace: %s in\n", what);}
+void traceOut(const char *what, int rc) {printf("fts-trace: %s out rc=%d\n", what, rc);}
+
 // snprintf returns the length it would have written, so a running offset must be clamped before the next append.
 struct Out {
     char *p; size_t cap, n;
@@ -371,12 +380,14 @@ void publish(unsigned count, const nvt_contact *c) {
 }
 
 bool snapshot(Session &s) {
+    traceIn("snapshot");
     mark(s, 1);
     if (!mapRegion(TB_GCC_BASE + 0x0000, 0x1000, s.gccLow) || !mapRegion(TB_GCC_BASE + 0x18000, 0x1000, s.gccS4) ||
         !mapRegion(TB_GCC_BASE + 0x23000, 0x1000, s.gccHalt) || !mapRegion(TB_GCC_BASE + 0x52000, 0x1000, s.gccVote) ||
         !mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_GPIO_IRQ), 0x1000, s.tlmmIrq) ||
         !mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_GPIO_SPI_MISO), 4 * TB_GPIO_STRIDE, s.tlmmSpi)) {
         fail(1, -12);
+        traceOut("snapshot", -12);
         return false;
     }
     uint32_t *v = s.vals;
@@ -398,10 +409,14 @@ bool snapshot(Session &s) {
     }
     for (unsigned i = 0; i < 4; ++i) v[9 + i] = rd32(s.tlmmSpi.va, i * TB_GPIO_STRIDE);
     v[13] = rd32(s.tlmmIrq.va, 4);
+    printf("fts-trace: snapshot gcc=%08x halt=%08x/%08x/%08x/%08x s4=%08x gpll0=%08x pins=%08x irqcfg=%08x\n",
+           v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[9], v[13]);
+    traceOut("snapshot", 0);
     return true;
 }
 
 bool enable(Session &s) {
+    traceIn("enable");
     mark(s, 2);
     // GPLL0 feeds the DFS levels; vote for it (a shared vote, not an exclusive enable) and wait for lock.
     wr32(s.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff, rd32(s.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff) | 1u);
@@ -425,12 +440,17 @@ bool enable(Session &s) {
     s.vals[3] = rd32(s.gccHalt.va, TB_HALT_CORE & 0xfff);
     s.vals[4] = rd32(s.gccHalt.va, TB_HALT_CORE_2X & 0xfff);
     s.vals[5] = rd32(s.gccS4.va, TB_HALT_S4 & 0xfff);
-    if (!ok) {fail(2, -110); return false;}   // never touch the engine without running clocks
+    if (!ok) {fail(2, -110); traceOut("enable", -110); return false;}   // never touch the engine without running clocks
     const uint32_t cfg = tb_pin_cfg(TB_FUNC_QUP1_SE4, TB_DRIVE_6MA);
     for (unsigned i = 0; i < 4; ++i) wr32(s.tlmmSpi.va, i * TB_GPIO_STRIDE, cfg);
     for (unsigned i = 0; i < 4; ++i) s.vals[9 + i] = rd32(s.tlmmSpi.va, i * TB_GPIO_STRIDE);
     mark(s, 3);   // the next accesses touch the engine: if the page freezes here, the engine access hung
-    if (!mapRegion(TB_QUP_WRAPPER_BASE, 0x2000, s.wrapper) || !mapRegion(TB_SE_BASE, TB_SE_SIZE, s.se)) {fail(3, -12); return false;}
+    if (!mapRegion(TB_QUP_WRAPPER_BASE, 0x2000, s.wrapper) || !mapRegion(TB_SE_BASE, TB_SE_SIZE, s.se)) {
+        fail(3, -12);
+        traceOut("enable", -12);
+        return false;
+    }
+    traceIn("geni_spi_read_info");
     s.spi.se = (struct geni_io){reinterpret_cast<void *>(s.se.va), ioRd, ioWr, ioDelayUs};
     s.spi.wrapper = (struct geni_io){reinterpret_cast<void *>(s.wrapper.va), ioRd, ioWr, ioDelayUs};
     mark(s, 31);   // first engine register read
@@ -439,7 +459,11 @@ bool enable(Session &s) {
     s.vals[15] = s.spi.info.fw_revision;
     s.vals[16] = s.spi.info.if_disable;
     s.vals[17] = s.spi.info.hw_param0;
-    if (r) {fail(3, r); return false;}
+    printf("fts-trace: geni info hwver=%08x fwrev=%08x if_disable=%08x hwparam0=%08x\n",
+           s.vals[14], s.vals[15], s.vals[16], s.vals[17]);
+    traceOut("geni_spi_read_info", r);
+    if (r) {fail(3, r); traceOut("enable", r); return false;}
+    traceOut("enable", 0);
     return true;
 }
 
@@ -481,28 +505,39 @@ bool prepareDma(Session &s) {
 }
 
 bool openBus(Session &s, unsigned hz) {
+    traceIn("openBus");
     mark(s, 4);
     s.spi.poll_limit = 400000;
     s.spi.poll_only = 2;             // keep the top-level IRQ enable: the status registers must stay visible to the poll
     // v53-v55 hardware: FIFO_IF_DISABLE=1 and the register that controls it (0x2008) aborts on access, so FIFO transfers
     // cannot be used; the SE DMA engine is the host-visible path.
-    if (s.spi.info.fifo_disabled && !prepareDma(s)) return false;
+    if (s.spi.info.fifo_disabled && !prepareDma(s)) {printf("fts-trace: prepareDma failed\n"); traceOut("openBus", -12); return false;}
     int r = geni_spi_init(&s.spi);
+    printf("fts-trace: geni_spi_init rc=%d\n", r);
+    traceOut("openBus", r);
     if (r) {fail(4, r); return false;}
     (void)hz;
     return true;
 }
 
 bool configureClock(Session &s, unsigned hz) {
+    traceIn("configureClock");
     struct tb_clock_choice choice = {};
-    if (tb_choose_clock(s.levelHz, TB_DFS_LEVELS, s.spi.oversampling, hz, &choice)) {fail(5, -22); return false;}
+    if (tb_choose_clock(s.levelHz, TB_DFS_LEVELS, s.spi.oversampling, hz, &choice)) {
+        fail(5, -22);
+        traceOut("configureClock", -22);
+        return false;
+    }
     s.level = choice.level;
     s.div = choice.div;
     s.actualHz = choice.actual_hz;
     // The divider arithmetic lives in the GENI library; the DFS level is selected through GENI_CLK_SEL.
     int r = geni_spi_set_clock(&s.spi, hz, static_cast<unsigned>(choice.sclk_hz), choice.level);
-    if (r) {fail(5, r); return false;}
+    printf("fts-trace: set_clock rc=%d hz=%u sclk=%llu actual=%llu level=%u div=%u\n",
+           r, hz, choice.sclk_hz, choice.actual_hz, choice.level, choice.div);
+    if (r) {fail(5, r); traceOut("configureClock", r); return false;}
     r = geni_spi_setup(&s.spi, TB_SPI_MODE, 0);
+    traceOut("configureClock", r);
     if (r) {fail(5, r); return false;}
     return true;
 }
@@ -651,7 +686,11 @@ static int ftsTransfer(struct geni_spi &spi, uint8_t op, uint32_t address, unsig
     txbuf[0] = op;
     for (unsigned i = 0; i < address_bytes; ++i) txbuf[1 + i] = static_cast<uint8_t>(address >> (8 * (address_bytes - 1 - i)));
     if (!rx && tx && length) memcpy(txbuf + head, tx, length);
+    // The one place a chip transaction can hang: a GENI transfer that never sees its FIFO/DMA completion spins
+    // inside geni_spi_transfer's poll loop, so the "xfer" line without its "done" is a hung engine, not a bad id.
+    printf("fts-trace: xfer op=%02x addr=0x%08x len=%u total=%u\n", op, address, length, total);
     int r = geni_spi_transfer(&spi, txbuf, rx ? rxbuf : nullptr, total, 0);
+    printf("fts-trace: xfer done op=%02x rc=%d\n", op, r);
     if (r) return r;
     if (rx && length) memcpy(rx, rxbuf + head + 1, length);
     return 0;
@@ -677,45 +716,69 @@ static int ftsConfigureSpi4(struct geni_spi &spi, uint8_t *txbuf, uint8_t *rxbuf
 
 // Drive the reset line (GPIO24, active high) through TLMM: mux to plain GPIO (function 0), then output.
 static void ftsReset(Session &s) {
-    if (!s.tlmmReset.va) return;
+    traceIn("ftsReset");
+    if (!s.tlmmReset.va) {printf("fts-trace: ftsReset no TLMM window\n"); traceOut("ftsReset", -12); return;}
     volatile uint32_t *ctl = reinterpret_cast<volatile uint32_t *>(s.tlmmReset.va);
     ctl[0] = tb_pin_cfg(0, TB_FTS_DRIVE_6MA) | (1u << 9);   // function 0 (GPIO), 6 mA, output enable
     __asm__ volatile("dsb sy" ::: "memory");
     ctl[1] = 0;                                             // drive low
     __asm__ volatile("dsb sy" ::: "memory");
+    printf("fts-trace: ftsReset gpio%d cfg=%08x driven low\n", TB_FTS_GPIO_RESET, ctl[0]);
     IOSleep(20);
     ctl[1] = 1;                                             // release high
     __asm__ volatile("dsb sy" ::: "memory");
+    printf("fts-trace: ftsReset released high\n");
     IOSleep(20);
+    traceOut("ftsReset", 0);
 }
 
 /* Stage 1-3 for the FTS part. Returns 0 on success, or the failing step. */
 static int ftsProbe(Session &s, unsigned hz) {
+    traceIn("ftsProbe");
     uint8_t txbuf[64], rxbuf[64];
-    if (!mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_FTS_GPIO_RESET), 0x1000, s.tlmmReset)) {fail(1, -12); return 1;}
+    if (!mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_FTS_GPIO_RESET), 0x1000, s.tlmmReset)) {
+        fail(1, -12);
+        traceOut("ftsProbe", 1);
+        return 1;
+    }
     // The reset pin must be an output before the chip is asked anything.
     ftsReset(s);
     s.level = 0;
     s.div = 0;
     s.actualHz = 0;
     mark(s, 30);
+    traceIn("ftsProbe.setup");
     int r = geni_spi_setup(&s.spi, ((TB_FTS_SPI_MODE & 1) ? GENI_SPI_CPHA : 0) | ((TB_FTS_SPI_MODE & 2) ? GENI_SPI_CPOL : 0), 0);
-    if (r) {fail(3, r); return 3;}
+    printf("fts-trace: ftsProbe setup mode=%u rc=%d\n", TB_FTS_SPI_MODE, r);
+    traceOut("ftsProbe.setup", r);
+    if (r) {fail(3, r); traceOut("ftsProbe", 3); return 3;}
     (void)hz;
     // Chip's own SPI pin configuration, then the id.
     mark(s, 32);
+    traceIn("ftsConfigureSpi4");
     r = ftsConfigureSpi4(s.spi, txbuf, rxbuf, sizeof txbuf);
-    if (r) {fail(3, r); return 3;}
+    traceOut("ftsConfigureSpi4", r);
+    if (r) {fail(3, r); traceOut("ftsProbe", 3); return 3;}
     mark(s, 33);
+    traceIn("ftsHwRead.chipId");
     uint8_t id[2] = {0, 0};
     r = ftsHwRead(s.spi, TB_FTS_HW_CHIP_ID, id, 2, txbuf, rxbuf, sizeof txbuf);
-    if (r) {fail(3, r); return 3;}
+    printf("fts-trace: ftsHwRead chip id rc=%d bytes=%02x %02x\n", r, id[0], id[1]);
+    traceOut("ftsHwRead.chipId", r);
+    if (r) {fail(3, r); traceOut("ftsProbe", 3); return 3;}
     s.chip.id[0] = id[0];
     s.chip.id[1] = id[1];
     s.ftsId = (static_cast<uint32_t>(id[0]) << 8) | id[1];
     s.vals[18] = s.ftsId;
     mark(s, 34);
-    if (s.ftsId != TB_FTS_CHIP_ID) {fail(3, -19); return 3;}   // -19: no such device
+    if (s.ftsId != TB_FTS_CHIP_ID) {
+        printf("fts-trace: ftsProbe id mismatch read=0x%04x want=0x%04x\n", s.ftsId, TB_FTS_CHIP_ID);
+        fail(3, -19);
+        traceOut("ftsProbe", 3);
+        return 3;   // -19: no such device
+    }
+    printf("fts-trace: ftsProbe id=0x%04x ok\n", s.ftsId);
+    traceOut("ftsProbe", 0);
     return 0;
 }
 
@@ -723,36 +786,55 @@ static int ftsProbe(Session &s, unsigned hz) {
  * AudioProbe::micRail(), on the same TCS 2 under the same AppsSmmuLock: drv@2's tcs-config allocates
  * TCS 0-3 only, and 0-2 are the ones working code already drives. */
 static bool ftsRail(Session &s) {
+    traceIn("ftsRail");
     constexpr size_t kDbSize = 0x20000;
     struct CmdDbCopy {
         uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kDbSize));
         ~CmdDbCopy() {if (bytes) IOFreeData(bytes, kDbSize);}
     } copy;
     uint8_t *const db = copy.bytes;
-    if (!db) return false;
+    if (!db) {traceOut("ftsRail", -12); return false;}
+    traceIn("ftsRail.cmdDb");
     Region dbw;
-    if (!mapRegion(0x81c60000ULL, kDbSize, dbw)) return false;
+    if (!mapRegion(0x81c60000ULL, kDbSize, dbw)) {printf("fts-trace: ftsRail cmd_db map failed\n"); traceOut("ftsRail", -12); return false;}
     for (size_t i = 0; i < kDbSize; i += 4) {const uint32_t w = rd32(dbw.va, static_cast<uint32_t>(i)); memcpy(db + i, &w, 4);}
     QcomRpmhResource dvdd, avdd;
-    if (qcom_cmd_db_find(db, kDbSize, TB_FTS_DVDD_RESOURCE, &dvdd)) return false;
-    if (qcom_cmd_db_find(db, kDbSize, TB_FTS_AVDD_RESOURCE, &avdd)) return false;
-    if (!mapRegion(TB_FTS_RSC_BASE, TB_FTS_RSC_SIZE, s.rsc)) return false;
+    if (qcom_cmd_db_find(db, kDbSize, TB_FTS_DVDD_RESOURCE, &dvdd)) {
+        printf("fts-trace: ftsRail dvdd resource %s not found\n", TB_FTS_DVDD_RESOURCE);
+        traceOut("ftsRail", -2);
+        return false;
+    }
+    if (qcom_cmd_db_find(db, kDbSize, TB_FTS_AVDD_RESOURCE, &avdd)) {
+        printf("fts-trace: ftsRail avdd resource %s not found\n", TB_FTS_AVDD_RESOURCE);
+        traceOut("ftsRail", -2);
+        return false;
+    }
+    printf("fts-trace: ftsRail %s=0x%08x %s=0x%08x\n", TB_FTS_DVDD_RESOURCE, dvdd.address,
+           TB_FTS_AVDD_RESOURCE, avdd.address);
+    traceOut("ftsRail.cmdDb", 0);
+    if (!mapRegion(TB_FTS_RSC_BASE, TB_FTS_RSC_SIZE, s.rsc)) {printf("fts-trace: ftsRail rsc map failed\n"); traceOut("ftsRail", -12); return false;}
     const QcomRscLayout layout = qcom_rsc_layout(rd32(s.rsc.va, 0));
     AppsSmmuLock tcsOwner;
-    auto send = [&](uint32_t address, uint32_t value) {
+    printf("fts-trace: ftsRail tcs=%d lock=%d\n", TB_FTS_RSC_TCS, tcsOwner.ready() ? 1 : 0);
+    // Each rail request is bracketed on its own: a TCS that never drains hangs inside one send(), and the
+    // last "send" line without its "done" names which of the six it was.
+    auto send = [&](const char *tag, uint32_t address, uint32_t value) {
+        printf("fts-trace: ftsRail send %s addr=0x%08x val=%u\n", tag, address, value);
         QcomRpmhWrite writes[16];
         const unsigned n = qcom_rpmh_active_request(&layout, TB_FTS_RSC_TCS, &address, &value, 1, writes, 16);
         for (unsigned i = 0; i < n; ++i) wr32(s.rsc.va, 0xd00 + writes[i].offset, writes[i].value);
         IOSleep(2);
         const unsigned m = qcom_rpmh_finish(&layout, TB_FTS_RSC_TCS, writes, 16);
         for (unsigned i = 0; i < m; ++i) wr32(s.rsc.va, 0xd00 + writes[i].offset, writes[i].value);
+        printf("fts-trace: ftsRail send %s done n=%u m=%u\n", tag, n, m);
     };
-    send(dvdd.address + 8, 7);                 // high power mode
-    send(dvdd.address, TB_FTS_DVDD_UV);        // 1.8 V, at the regulator's min = max
-    send(dvdd.address + 4, 1);
-    send(avdd.address + 8, 7);
-    send(avdd.address, TB_FTS_AVDD_UV);        // 2.8 V, at the regulator's min = max (NOT 3.3 V)
-    send(avdd.address + 4, 1);
+    send("dvdd-mode", dvdd.address + 8, 7);                 // high power mode
+    send("dvdd-uv", dvdd.address, TB_FTS_DVDD_UV);        // 1.8 V, at the regulator's min = max
+    send("dvdd-en", dvdd.address + 4, 1);
+    send("avdd-mode", avdd.address + 8, 7);
+    send("avdd-uv", avdd.address, TB_FTS_AVDD_UV);        // 2.8 V, at the regulator's min = max (NOT 3.3 V)
+    send("avdd-en", avdd.address + 4, 1);
+    traceOut("ftsRail", 0);
     return true;
 }
 
@@ -770,6 +852,7 @@ static void touchThread(void *, wait_result_t) {
     PE_parse_boot_argn("sheng-touch-hz", &hz, sizeof hz);
     if (hz < 100000 || hz > TB_SPI_MAX_HZ) hz = TB_SPI_DEFAULT_HZ;
     do {
+        printf("fts-trace: touchThread stage=%u hz=%u fts=%d\n", stage, hz, ftsMode ? 1 : 0);
         if (!snapshot(*s)) break;
         native_touch_stage_done = 1;
         rows(*s);
@@ -782,15 +865,19 @@ static void touchThread(void *, wait_result_t) {
         // own rails, clock, pins and chip id, then leave. The Novatek identification, firmware download
         // and scanning below are never entered -- every exit of this branch breaks.
         if (ftsMode) {
-            if (!ftsRail(*s)) {fail(2, -6); rows(*s); break;}
+            if (!ftsRail(*s)) {fail(2, -6); printf("fts-trace: ftsRail failed, stopping\n"); rows(*s); break;}
             // The bus is brought up at the clock this engine already ran at on out-45136340399
             // (TB_SPI_DEFAULT_HZ, 19.2 MHz -- the board DT's spi-max-frequency), not the 4 MHz
             // bring-up rate: the desktopping image ran GENI-SPI transfers at 19.2 MHz on this same
             // engine, so no clock that has not been seen working is introduced here.
-            if (!openBus(*s, TB_SPI_DEFAULT_HZ) || !configureClock(*s, TB_SPI_DEFAULT_HZ)) break;
-            if (ftsProbe(*s, TB_SPI_DEFAULT_HZ)) {rows(*s); break;}
+            if (!openBus(*s, TB_SPI_DEFAULT_HZ) || !configureClock(*s, TB_SPI_DEFAULT_HZ)) {
+                printf("fts-trace: openBus/configureClock failed, stopping\n");
+                break;
+            }
+            if (ftsProbe(*s, TB_SPI_DEFAULT_HZ)) {printf("fts-trace: ftsProbe failed, stopping\n"); rows(*s); break;}
             native_touch_stage_done = 3;
             rows(*s);
+            printf("fts-trace: fts path complete, id=0x%04x\n", s->ftsId);
             break;                      // read-only: no firmware stage exists after this point
         }
         if (!openBus(*s, hz) || !configureClock(*s, hz)) break;
@@ -1092,9 +1179,12 @@ extern "C" void native_touch_probe(void) {
     // in the range the probe records; it no longer guards a firmware stage.
     if (stage > 5) stage = 5;
     native_touch_stage_req = stage;
+    // Declared here as well: an image whose touch thread never reaches its first stage is otherwise
+    // indistinguishable from a probe that was never asked to run.
+    printf("fts-trace: native_touch_probe stage=%u\n", stage);
     thread_t thread = nullptr;
     if (kernel_thread_start(touchThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
-    else native_touch_error = -12;
+    else {native_touch_error = -12; printf("fts-trace: touch thread start failed\n");}
     unsigned swipeAfter = 0;
     if (PE_parse_boot_argn("sheng-swipe", &swipeAfter, sizeof swipeAfter) && swipeAfter &&
         kernel_thread_start(swipeThread, reinterpret_cast<void *>(uintptr_t(swipeAfter)), &thread) == KERN_SUCCESS)
