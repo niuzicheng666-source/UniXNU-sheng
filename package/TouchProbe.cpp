@@ -1173,8 +1173,13 @@ static void swipeThread(void *parameter, wait_result_t) {
 }
 
 extern "C" void native_touch_probe(void) {
+    // Unconditional, before PE_parse_boot_argn: it separates "XNU never called the probe" and "the probe
+    // was called but declined the boot arg" from "the probe ran and hung", which the trace below cannot.
+    printf("fts-trace: probe entered\n");
     unsigned stage = 0;
-    if (!PE_parse_boot_argn("sheng-touch", &stage, sizeof stage) || stage < 1 || native_touch_stage_req) return;
+    int have = PE_parse_boot_argn("sheng-touch", &stage, sizeof stage);
+    printf("fts-trace: boot arg sheng-touch have=%d stage=%u req=%u\n", have, stage, native_touch_stage_req);
+    if (!have || stage < 1 || native_touch_stage_req) {printf("fts-trace: probe declined\n"); return;}
     // On this board 3 and above are all the FTS read-only path, so the clamp only has to keep the value
     // in the range the probe records; it no longer guards a firmware stage.
     if (stage > 5) stage = 5;
